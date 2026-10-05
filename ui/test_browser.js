@@ -1,0 +1,156 @@
+// Run with: node ui/test_browser.js (from the repository root).
+// The static website (site/index.html): keys typed in the page, requests only to the two providers.
+'use strict';
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const vm = require('node:vm');
+const path = require('node:path');
+
+const html = fs.readFileSync(path.join(__dirname, '..', 'site', 'index.html'), 'utf8');
+// The privacy claim is enforced by the page's own connection policy, not just promised.
+const policy = /http-equiv="Content-Security-Policy" content="([^"]+)"/.exec(html)[1];
+const directive = name => policy.split(';').map(d => d.trim()).find(d => d.startsWith(name + ' '));
+assert.equal(directive('connect-src'), 'connect-src https://api.typesafe.ai https://openrouter.ai', 'only the two providers can be contacted');
+assert.equal(directive('default-src'), "default-src 'none'");
+assert.equal(directive('script-src'), "script-src 'self'");
+assert.equal(directive('form-action'), "form-action 'none'");
+assert.doesNotMatch(html, /<script(?![^>]*\ssrc=)[^>]*>/, 'no inline scripts');
+assert.doesNotMatch(html, /<script[^>]+src="https?:/, 'no third-party scripts');
+assert.match(html, /<body data-mode="browser">/);
+const ids = [...html.matchAll(/\sid="([^"]+)"/g)].map(m => m[1]);
+
+class Node {
+  constructor(tag = 'div') {
+    this.tagName = tag; this.children = []; this.listeners = {}; this._text = '';
+    this.value = ''; this.disabled = false; this.hidden = false; this.checked = false; this.className = ''; this.style = {};
+    this.classList = {add() {}, remove() {}, toggle() {}};
+  }
+  set textContent(value) { this._text = String(value); this.children = []; }
+  get textContent() { return this._text + this.children.map(c => c.textContent).join(''); }
+  get options() { return this.children; }
+  append(...items) {
+    this.children.push(...items);
+    if (this.tagName === 'select' && items.length && this.children.length === items.length) this.value = this.children[0].value;
+    // <script src="examples/malicious_events.js"> appended to <head>: run the built example file.
+    for (const item of items) if (item.tagName === 'script') setImmediate(() => { context.CASEBENCH_EXAMPLE = example; item.onload(); });
+  }
+  replaceChildren(...items) { this.children = []; this._text = ''; this.append(...items); }
+  addEventListener(name, fn) { this.listeners[name] = fn; }
+  setAttribute(name, value) { this[name] = value; }
+  fire(name, data = {}) { return this.listeners[name](data); }
+  click() { return this.fire('click'); }
+}
+const example = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'examples', 'malicious_events.json'), 'utf8'));
+const nodes = Object.fromEntries(ids.map(id => [id, new Node(id === 'seed' ? 'select' : 'div')]));
+nodes.download.hidden = nodes.resume.hidden = true;
+const storage = new Map();
+const requests = [];
+let respond = () => { throw new Error('unexpected request'); };
+const context = {
+  document: {getElementById: id => nodes[id], createElement: tag => new Node(tag), body: {dataset: {mode: 'browser'}}, head: new Node('head')},
+  location: {hostname: 'tsale.github.io', protocol: 'https:', origin: 'https://tsale.github.io', hash: ''},
+  localStorage: {getItem: k => storage.has(k) ? storage.get(k) : null, setItem: (k, v) => storage.set(k, String(v)), removeItem: k => storage.delete(k)},
+  fetch: async (url, init) => { requests.push({url, init}); return respond(url, init); },
+  URL, Date, Set, Map, JSON, Error, TypeError, AbortController, TextEncoder, crypto, performance, setTimeout, clearTimeout, setImmediate, Promise,
+};
+vm.createContext(context);
+vm.runInContext(fs.readFileSync(path.join(__dirname, 'engine.js'), 'utf8'), context);
+vm.runInContext(fs.readFileSync(path.join(__dirname, 'app.js'), 'utf8'), context);
+
+const flush = () => new Promise(resolve => setImmediate(resolve));
+async function settle() { for (let i = 0; i < 200; i++) await flush(); }
+const reply = (status, body) => ({ok: status >= 200 && status < 300, status, text: async () => JSON.stringify(body)});
+const jev = noul => reply(200, {model: 'jev-1.13.0', usage: {input_tokens: 5, output_tokens: 1},
+  answers: {related: {type: 'noul', noul}, evidence: {type: 'choice', choice: noul >= 0.8 ? 'lineage' : 'no_link'}}});
+const scores = {child: 0.94, later: 0.88, unrelated: 0.05};
+const typeSafe = (url, init) => jev(scores[JSON.parse(init.body).state.candidate.id]);
+const type = (id, value) => { nodes[id].value = value; nodes[id].fire('input'); };
+
+(async () => {
+  assert.equal(requests.length, 0, 'opening the page contacts no one');
+  // The privacy notice can be dismissed, stays dismissed in this browser, and comes back from the top bar.
+  assert.equal(nodes['privacy-note'].hidden, false);
+  assert.equal(nodes['privacy-show'].hidden, true);
+  nodes['privacy-dismiss'].click();
+  assert.equal(nodes['privacy-note'].hidden, true);
+  assert.equal(nodes['privacy-show'].hidden, false);
+  assert.equal(storage.get('casebench.privacyDismissed'), '1');
+  nodes['privacy-show'].click();
+  assert.equal(nodes['privacy-note'].hidden, false);
+  assert.equal(storage.has('casebench.privacyDismissed'), false);
+  assert.match(nodes['key-status'].textContent, /TypeSafe key needed/);
+
+  // Bundled example loads from the site's own static files; nothing is sent.
+  await nodes.preview.click(); await settle();
+  assert.match(nodes.source.textContent, /Bundled malicious-events example · 100 events/);
+  assert.equal(nodes.seed.value, 'VvT8xKABOYkemEz9sgQR');
+  assert.equal(requests.length, 0);
+
+  // Analyze without a key is refused locally.
+  nodes.description.value = 'Confirmed';
+  await nodes.analyze.click(); await settle();
+  assert.match(nodes.status.textContent, /Enter your TypeSafe API key/);
+  assert.equal(requests.length, 0);
+
+  // Keys stay in memory unless "Remember on this device" is checked; Forget clears both.
+  type('jev-key', ' ts-key ');
+  assert.equal(storage.size, 0, 'not stored by default');
+  nodes['remember-keys'].checked = true; nodes['remember-keys'].fire('change');
+  assert.deepEqual(JSON.parse(storage.get('casebench.keys')), {jev: 'ts-key', openrouter: ''});
+  nodes['forget-keys'].click();
+  assert.equal(storage.size, 0);
+  assert.equal(nodes['jev-key'].value, '');
+  type('jev-key', 'ts-key');
+
+  // A full analysis on the synthetic fixture goes only to TypeSafe, with the key only in the header.
+  const fixture = fs.readFileSync(path.join(__dirname, '..', 'tests', 'fixtures', 'synthetic.json'), 'utf8');
+  await nodes.file.fire('change', {target: {files: [{size: fixture.length, name: 'synthetic.json', text: async () => fixture}]}});
+  await settle();
+  nodes.seed.value = 'seed'; nodes.seed.fire('change');
+  nodes.description.value = 'Analyst context';
+  respond = typeSafe;
+  await nodes.analyze.click(); await settle();
+  assert.ok(requests.length >= 3);
+  assert.ok(requests.every(r => r.url === 'https://api.typesafe.ai/v1/systemone'));
+  assert.ok(requests.every(r => r.init.headers.Authorization === 'Bearer ts-key' && !r.init.body.includes('ts-key')));
+  assert.equal(nodes['page-events'].hidden, false, 'results open the timeline');
+  assert.match(nodes.timeline.textContent, /Jev-linked incident execution · 94%/);
+  assert.match(nodes.findings.textContent, /Jev decision\(s\) matched/);
+  assert.equal(nodes.download.hidden, false, 'run can be downloaded');
+  assert.equal(nodes.narrate.disabled, true, 'narrative needs an OpenRouter key');
+
+  // Optional narrative goes only to OpenRouter.
+  type('openrouter-key', 'or-key');
+  assert.equal(nodes.narrate.disabled, false);
+  requests.length = 0;
+  respond = () => reply(200, {model: 'deepseek/deepseek-v4.1-flash', choices: [{finish_reason: 'stop', message: {content: JSON.stringify({timeline: [
+    {event_id: 'child', title: 'Stage execution', summary: 'stage.exe started from the seed', evidence_ids: ['seed', 'child']}]})}}]});
+  await nodes.narrate.click(); await settle();
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].url, 'https://openrouter.ai/api/v1/chat/completions');
+  assert.equal(requests[0].init.headers.Authorization, 'Bearer or-key');
+  assert.match(nodes['table-body'].textContent, /Stage execution/);
+
+  // An outage after one answer offers Resume, which asks Jev only for the remaining candidates.
+  nodes.description.value = 'Analyst context, again'; nodes.description.fire('input');
+  requests.length = 0;
+  let calls = 0;
+  respond = (url, init) => ++calls === 1 ? typeSafe(url, init) : reply(401, {error: 'expired'});
+  await nodes.analyze.click(); await settle();
+  assert.match(nodes.status.textContent, /Analysis failed: TypeSafe rejected the API key \(HTTP 401\)/);
+  assert.equal(nodes.resume.hidden, false);
+  assert.match(nodes.resume.textContent, /1 answered call reused/);
+  requests.length = 0;
+  respond = typeSafe;
+  await nodes.resume.click(); await settle();
+  assert.match(nodes.status.textContent, /after resume \(1 answer reused\)/);
+  assert.ok(requests.length >= 2);
+
+  // A CORS refusal (fetch TypeError) explains itself and offers nothing to resume.
+  nodes.description.value = 'Third run'; nodes.description.fire('input');
+  respond = () => { throw new TypeError('Failed to fetch'); };
+  await nodes.analyze.click(); await settle();
+  assert.match(nodes.status.textContent, /may not accept requests from websites yet \(CORS\)/);
+  assert.equal(nodes.resume.hidden, true);
+  console.log('Browser site passed: provider-only connection policy, in-memory keys, direct TypeSafe/OpenRouter calls, resume, CORS message.');
+})().catch(error => { console.error(error); process.exit(1); });
