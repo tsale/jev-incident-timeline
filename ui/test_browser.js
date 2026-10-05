@@ -75,10 +75,10 @@ const type = (id, value) => { nodes[id].value = value; nodes[id].fire('input'); 
   nodes['privacy-dismiss'].click();
   assert.equal(nodes['privacy-note'].hidden, true);
   assert.equal(nodes['privacy-show'].hidden, false);
-  assert.equal(storage.get('casebench.privacyDismissed'), '1');
+  assert.equal(storage.get('jevline.privacyDismissed'), '1');
   nodes['privacy-show'].click();
   assert.equal(nodes['privacy-note'].hidden, false);
-  assert.equal(storage.has('casebench.privacyDismissed'), false);
+  assert.equal(storage.has('jevline.privacyDismissed'), false);
   // The demo key is the default: no key field, and Analyze works on the bundled example only.
   assert.equal(nodes['mode-demo'].checked, true);
   assert.equal(nodes['jev-key-field'].hidden, true);
@@ -127,7 +127,7 @@ const type = (id, value) => { nodes[id].value = value; nodes[id].fire('input'); 
   type('jev-key', ' ts-key ');
   assert.equal(storage.size, 0, 'not stored by default');
   nodes['remember-keys'].checked = true; nodes['remember-keys'].fire('change');
-  assert.deepEqual(JSON.parse(storage.get('casebench.keys')), {jev: 'ts-key', openrouter: ''});
+  assert.deepEqual(JSON.parse(storage.get('jevline.keys')), {jev: 'ts-key', openrouter: ''});
   nodes['forget-keys'].click();
   assert.equal(storage.size, 0);
   assert.equal(nodes['jev-key'].value, '');
@@ -154,7 +154,7 @@ const type = (id, value) => { nodes[id].value = value; nodes[id].fire('input'); 
   assert.equal(nodes.narrate.disabled, false);
   requests.length = 0;
   type('narrative-model', 'anthropic/claude-sonnet-5.5');
-  assert.equal(storage.get('casebench.model'), 'anthropic/claude-sonnet-5.5', 'a chosen model is remembered');
+  assert.equal(storage.get('jevline.model'), 'anthropic/claude-sonnet-5.5', 'a chosen model is remembered');
   respond = () => reply(200, {model: 'anthropic/claude-sonnet-5.5', choices: [{finish_reason: 'stop', message: {content: JSON.stringify({timeline: [
     {event_id: 'child', title: 'Stage execution', summary: 'stage.exe started from the seed', evidence_ids: ['seed', 'child'], tactic: 'Execution', techniques: ['T1059.001']}],
     execution_chain: '- **powershell.exe** [evt:seed]\n  - **stage.exe** [evt:child]'})}}]});
@@ -172,7 +172,7 @@ const type = (id, value) => { nodes[id].value = value; nodes[id].fire('input'); 
   assert.match(nodes.status.textContent, /must be an OpenRouter model ID/);
   assert.equal(requests.length, 1, 'an invalid model is refused before sending');
   type('narrative-model', 'deepseek/deepseek-v4.1-flash');
-  assert.equal(storage.has('casebench.model'), false, 'the default model is not stored');
+  assert.equal(storage.has('jevline.model'), false, 'the default model is not stored');
   assert.match(nodes['table-body'].textContent, /Stage execution/);
 
   // An outage after one answer offers Resume, which asks Jev only for the remaining candidates.

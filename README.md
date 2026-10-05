@@ -1,4 +1,6 @@
-# Jev Incident Timeline
+# Jevline
+
+*Jev incident timelines: one confirmed process in, the whole incident out.*
 
 **Start from one process you know is malicious. Get back the incident.**
 
@@ -10,7 +12,7 @@
 
 Once an analyst confirms one malicious process, the next question is always *what else is part of this?* This proof of concept puts that question to [Jev](https://docs.typesafe.ai/), TypeSafe's structured-decision model, one process at a time, and turns the answers into an incident timeline you can review.
 
-It comes with **Casebench**, a web portal you can use as a website or run locally, and a command-line script. Nothing to install: the website runs in your browser, and the local version uses only the Python standard library.
+It comes as a web portal you can use as a website or run locally, and a command-line script. Nothing to install: the website runs in your browser, and the local version uses only the Python standard library.
 
 > [!NOTE]
 > This is an experimental proof of concept, not a validated detector. A Jev score measures **relatedness to the incident**, not whether a process is malicious. Every result needs analyst review.
@@ -204,7 +206,7 @@ To deploy your own copy, import the repository in Vercel (or run `vercel deploy 
 | Path | Contents |
 |---|---|
 | `jev_incident.py` | Normalization, context selection, Jev requests, evidence bundles, CLI |
-| `web_app.py` | Casebench server: static UI, `/api/analyze`, `/api/narrate`, key handling, retention |
+| `web_app.py` | Jevline server: static UI, `/api/analyze`, `/api/narrate`, key handling, retention |
 | `ui/` | Shared portal JavaScript and CSS, the local portal page, and `engine.js` (the browser port of the engine) |
 | `site/index.html` | The website page: Jev access choice, key panel, privacy notice, connection policy |
 | `api/jev.js`, `api/_relay.js` | The website's Jev relay (Vercel function): demo key limited to the bundled example, visitors' keys forwarded |

@@ -15,8 +15,8 @@
   // Where the website sends Jev requests: its relay (api/jev.js); without one, TypeSafe directly.
   const JEV_ENDPOINT = document.body?.dataset?.jevEndpoint || '';
   const DEMO_AVAILABLE = BROWSER && !!JEV_ENDPOINT;
-  const KEY_STORE = 'casebench.keys';
-  const MODEL_STORE = 'casebench.model';
+  const KEY_STORE = 'jevline.keys';
+  const MODEL_STORE = 'jevline.model';
   const DEFAULT_MODEL = 'deepseek/deepseek-v4.1-flash';
   const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._:-]*$/;
   const PAGES = ['setup', 'events', 'chain', 'table'];
@@ -165,7 +165,7 @@
     renderKeys();
   }
   // The privacy notice can be dismissed; the choice is remembered in this browser and Privacy brings it back.
-  const NOTE_STORE = 'casebench.privacyDismissed';
+  const NOTE_STORE = 'jevline.privacyDismissed';
   function setupPrivacyNote() {
     const show = visible => {
       $('privacy-note').hidden = !visible;
@@ -773,12 +773,12 @@
   }
   function downloadRun() {
     if (!state.lastRun) return;
-    const bundle = {generated_by:'Casebench (browser)', seed_id:$('seed').value, description:$('description').value.trim(),
+    const bundle = {generated_by:'Jevline (browser)', seed_id:$('seed').value, description:$('description').value.trim(),
       summary:state.lastRun.summary, decisions:state.lastRun.decisions, attempts:state.lastRun.attempts};
     const url = URL.createObjectURL(new Blob([JSON.stringify(bundle, null, 2) + '\n'], {type:'application/json'}));
     const link = document.createElement('a');
     link.href = url;
-    link.download = `casebench-run-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+    link.download = `jevline-run-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
     link.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }

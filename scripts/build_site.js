@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Assemble the Casebench website into _site/. Vercel serves it together with the Jev relay in api/.
+// Assemble the Jevline website into _site/. Vercel serves it together with the Jev relay in api/.
 //
 //   node scripts/build_site.js            # writes _site/
 //   node scripts/serve_site.js            # local preview with the relay: http://127.0.0.1:8000

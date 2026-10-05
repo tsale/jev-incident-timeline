@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Casebench: local review portal for the Jev incident-correlation POC. Replit preview is explicit opt-in."""
+"""Jevline: local review portal for the Jev incident-correlation POC. Replit preview is explicit opt-in."""
 
 import argparse
 from dataclasses import dataclass
@@ -701,9 +701,9 @@ def main():
     except OSError as exc:
         parser.error(f'cannot listen on port {args.port} ({exc.strerror or exc}); is it already running? Try --port {args.port + 1}')
     if preview_host:
-        print(f'Casebench listening on port {args.port} for https://{preview_host}/ (provider calls only on explicit buttons)', flush=True)
+        print(f'Jevline listening on port {args.port} for https://{preview_host}/ (provider calls only on explicit buttons)', flush=True)
     else:
-        print(f'Casebench is running at http://127.0.0.1:{args.port}/  (press Ctrl+C to stop)', flush=True)
+        print(f'Jevline is running at http://127.0.0.1:{args.port}/  (press Ctrl+C to stop)', flush=True)
     status = provider_status(config)
     print(f'  Jev (TypeSafe) key: {"ready" if status["jev_configured"] else "missing; run: python3 web_app.py --setup-keys"}', flush=True)
     print(f'  OpenRouter key:     {"ready" if status["openrouter_configured"] else "not set (optional, narrative drafts only)"}', flush=True)

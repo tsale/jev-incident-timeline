@@ -37,4 +37,4 @@ http.createServer((req, res) => {
   if (!file.startsWith(SITE + path.sep) || !fs.existsSync(file) || !fs.statSync(file).isFile()) { res.statusCode = 404; return res.end('Not found'); }
   res.setHeader('Content-Type', TYPES[path.extname(file)] || 'application/octet-stream');
   fs.createReadStream(file).pipe(res);
-}).listen(port, '127.0.0.1', () => process.stdout.write(`Casebench website preview at http://127.0.0.1:${port}/ (Ctrl+C to stop)\n`));
+}).listen(port, '127.0.0.1', () => process.stdout.write(`Jevline website preview at http://127.0.0.1:${port}/ (Ctrl+C to stop)\n`));

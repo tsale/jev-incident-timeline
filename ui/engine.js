@@ -454,7 +454,7 @@
     for (const maxTokens of [8192, 16384]) {
       const body = JSON.stringify({model, temperature: 0, max_tokens: maxTokens, messages});
       const reply = await send(OPENROUTER, {method: 'POST', headers: {'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json',
-        'X-Title': 'Casebench'}, body}, fetchImpl, signal);
+        'X-Title': 'Jevline'}, body}, fetchImpl, signal);
       if (reply.networkError) throw unreachable('OpenRouter', false);
       if (reply.timedOut) throw new ProviderError('OpenRouter could not be reached or timed out; retry later.');
       const status = reply.response.status;

@@ -12,7 +12,7 @@ const report = message => process.stdout.write(message + '\n');
 
 function call(handler, {method = 'POST', headers = {}, body, raw} = {}) {
   const req = raw !== undefined ? Object.assign(Readable.from([Buffer.from(raw)]), {method}) : {method, body};
-  req.headers = {host: 'casebench.example', origin: 'https://casebench.example', 'content-type': 'application/json', 'x-real-ip': '198.51.100.7', ...headers};
+  req.headers = {host: 'jevline.example', origin: 'https://jevline.example', 'content-type': 'application/json', 'x-real-ip': '198.51.100.7', ...headers};
   return new Promise(resolve => {
     const res = {headers: {}, statusCode: 200, setHeader(k, v) { this.headers[k.toLowerCase()] = v; },
       end(text) { resolve({status: this.statusCode, headers: this.headers, text, json: (() => { try { return JSON.parse(text); } catch { return null; } })()}); }};

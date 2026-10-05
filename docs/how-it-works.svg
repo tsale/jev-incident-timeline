@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 430" width="1000" height="430" role="img" aria-labelledby="title desc">
-  <title id="title">How Jev Incident Timeline works</title>
+  <title id="title">How Jevline works</title>
   <desc id="desc">Step 1: your telemetry export contains many events, one of which an analyst has confirmed as malicious. Step 2: for each other process start, Jev is asked whether it belongs to the same incident; linked processes score at or above 0.8 and become context for later questions. Step 3: the result is a timeline that contains only the confirmed seed, the Jev-linked processes and activity from those same processes.</desc>
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
