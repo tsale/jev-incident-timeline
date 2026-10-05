@@ -2,7 +2,7 @@
 
 **Start from one process you know is malicious. Get back the incident.**
 
-**[Try it in your browser →](https://tsale.github.io/jev-incident-timeline/)** · [Run it locally](#quick-start)
+**[Try it in your browser →](https://jev-incident-timeline.vercel.app/)** · [Run it locally](#quick-start)
 
 <p align="center">
   <img src="docs/how-it-works.svg" alt="Three steps: a telemetry export with one confirmed-malicious process; Jev asks of every other process whether it belongs to the same incident; the result is a timeline of only the linked activity." width="100%">
@@ -19,15 +19,20 @@ It comes with **Casebench**, a web portal you can use as a website or run locall
 
 | | **Website** | **Local portal** |
 |---|---|---|
-| Start | Open **[tsale.github.io/jev-incident-timeline](https://tsale.github.io/jev-incident-timeline/)** | `python3 web_app.py` (see [Quick start](#quick-start)) |
-| Your API keys | Typed into the page; kept in your browser only | Saved in `.env` on your machine |
-| Where data goes | From your browser straight to TypeSafe (and OpenRouter, if you ask for a narrative) | From your machine straight to the same providers |
+| Start | Open **[jev-incident-timeline.vercel.app](https://jev-incident-timeline.vercel.app/)** | `python3 web_app.py` (see [Quick start](#quick-start)) |
+| Jev (TypeSafe) | Our **demo key** on the bundled example, or **your own key** for your files | Your key, saved in `.env` on your machine |
+| OpenRouter (optional) | Your key, typed into the page | Your key, in `.env` |
+| Where data goes | Jev requests go through the site's relay to TypeSafe; narratives go straight from your browser to OpenRouter | From your machine straight to both providers |
 | Evidence | **Download run (JSON)** | Private bundle in `.local-runs/` |
 
-**The website has no backend.** Your keys and the files you load are never sent to us. The page's security policy only allows connections to `api.typesafe.ai` and `openrouter.ai`, so you can verify this in your browser's developer tools. The providers do receive the telemetry you analyze, under their own terms.
+**How the website handles keys and data.** Browsers can't call TypeSafe's API directly (it doesn't allow cross-site requests), so the website runs the analysis in your browser and sends each Jev request through a small relay on the same site, [`api/jev.js`](api/jev.js), which forwards it to TypeSafe unchanged.
 
-> [!IMPORTANT]
-> The website needs TypeSafe's API to accept requests from web pages (CORS). As of October 2026 it doesn't yet, so **Analyze with Jev** on the website stops with a message explaining this. Until TypeSafe enables it, use the local portal. OpenRouter already accepts browser requests.
+- **Demo key:** our TypeSafe key, stored as a server secret, works only on the bundled lab example. The relay rejects any request containing other data.
+- **Your own key:** it travels with each request through the relay to TypeSafe and is never stored or logged. Choose this to analyze your own files.
+- **OpenRouter:** your key goes straight from your browser to `openrouter.ai`, never through us.
+- **Your files:** they stay in your browser. Only the fields Jev needs leave it, one request per process.
+
+The page's security policy only allows connections to its own site and `openrouter.ai`, so you can check every request in your browser's developer tools. The providers receive the telemetry you analyze, under their own terms.
 
 ## Quick start
 
@@ -156,10 +161,10 @@ This applies to both the website and the local portal.
 | Action | What is sent | Where |
 |---|---|---|
 | Open the portal or import a file | Nothing | |
-| **Analyze with Jev** | For each candidate: selected fields only (IDs, time, host, user, process name, path, command line, PIDs, entity IDs, hashes, file and destination fields) of the seed, the candidate and its context events | TypeSafe |
-| **Request narrative** | The seed, the linked executions and their same-process events (50 at most) | OpenRouter |
+| **Analyze with Jev** | For each candidate: selected fields only (IDs, time, host, user, process name, path, command line, PIDs, entity IDs, hashes, file and destination fields) of the seed, the candidate and its context events | TypeSafe (on the website, via the site's relay) |
+| **Request narrative** | The seed, the linked executions and their same-process events (50 at most) | OpenRouter (directly) |
 
-Only analyze telemetry you're allowed to share with these providers. On the website, keys live in the page's memory unless you tick **Remember on this device** (then in that browser's local storage; **Forget keys** removes them). In the local portal, each analysis writes an evidence bundle to `.local-runs/`, which is private, git-ignored and deleted 14 days after its last write. The server listens on `127.0.0.1` only, rejects cross-origin requests and never sends keys to the browser. It's a single-user local tool, so don't expose it to a network.
+Only analyze telemetry you're allowed to share with these providers. On the website, your keys live in the page's memory unless you tick **Remember on this device** (then in that browser's local storage; **Forget keys** removes them), and the relay keeps nothing. In the local portal, each analysis writes an evidence bundle to `.local-runs/`, which is private, git-ignored and deleted 14 days after its last write. The server listens on `127.0.0.1` only, rejects cross-origin requests and never sends keys to the browser. It's a single-user local tool, so don't expose it to a network.
 
 ## Limitations
 
@@ -171,28 +176,29 @@ Only analyze telemetry you're allowed to share with these providers. On the webs
 
 ```bash
 python3 -m unittest -v test_jev_incident.py test_web_app.py
-node ui/test_engine.js && node ui/test_app.js && node ui/test_access.js && node ui/test_browser.js
+node ui/test_engine.js && node ui/test_app.js && node ui/test_access.js && node ui/test_browser.js && node tests/test_relay.js
 ```
 
 All tests run offline with mocked providers. The JavaScript tests need Node.js; the app itself doesn't. `ui/engine.js` is a port of `jev_incident.py`, and `ui/test_engine.js` checks that it sends Jev byte-for-byte the same requests on three fixtures. After an intentional change to the Python engine, regenerate the reference with `python3 -c "import test_jev_incident as t; t.write_golden()"` and update the port until both suites pass.
 
-### Publishing the website
+### The website on Vercel
 
-The [Website workflow](.github/workflows/pages.yml) runs every test, builds the site and deploys it to GitHub Pages on each push to `main`. To turn it on, open **Settings → Pages** and set **Source** to **GitHub Actions**. To preview the site locally:
+The website is `site/index.html` plus the shared `ui/` files, built into `_site/` by `node scripts/build_site.js`, and the relay function in `api/`. `vercel.json` sets the build and the security headers. To preview it locally with the relay:
 
 ```bash
-python3 scripts/build_site.py
-python3 -m http.server 8000 --bind 127.0.0.1 --directory _site
+node scripts/build_site.js
+node scripts/serve_site.js        # http://127.0.0.1:8000
 ```
 
-Any static host works too: upload the contents of `_site/`. Don't let the host inject scripts or analytics, because the page's security policy would block them and the privacy statement relies on there being none.
+To deploy your own copy, import the repository in Vercel (or run `vercel deploy --prod`), then add the demo key as a secret: `vercel env add TYPESAFE_API_KEY production`, and redeploy. Without it the site still works with visitors' own keys. Set a spending limit on that TypeSafe key: the relay rate-limits each visitor and caches repeated demo requests, but per running instance only, so add a Vercel Firewall rate-limit rule on `/api/jev` for a hard limit. The [Tests workflow](.github/workflows/tests.yml) runs every suite on each push and pull request.
 
 | Path | Contents |
 |---|---|
 | `jev_incident.py` | Normalization, context selection, Jev requests, evidence bundles, CLI |
 | `web_app.py` | Casebench server: static UI, `/api/analyze`, `/api/narrate`, key handling, retention |
 | `ui/` | Shared portal JavaScript and CSS, the local portal page, and `engine.js` (the browser port of the engine) |
-| `site/index.html` | The website page: key panel, privacy notice, connection policy |
-| `scripts/build_site.py`, `.github/workflows/pages.yml` | Website build and GitHub Pages deployment |
+| `site/index.html` | The website page: Jev access choice, key panel, privacy notice, connection policy |
+| `api/jev.js`, `api/_relay.js` | The website's Jev relay (Vercel function): demo key limited to the bundled example, visitors' keys forwarded |
+| `scripts/build_site.js`, `scripts/serve_site.js`, `vercel.json` | Website build, local preview with the relay, Vercel settings |
 | `examples/`, `tests/fixtures/` | Bundled lab export; synthetic and edge-case fixtures; the engine parity reference |
 | `docs/` | README illustration |

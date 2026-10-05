@@ -10,13 +10,13 @@ const html = fs.readFileSync(path.join(__dirname, '..', 'site', 'index.html'), '
 // The privacy claim is enforced by the page's own connection policy, not just promised.
 const policy = /http-equiv="Content-Security-Policy" content="([^"]+)"/.exec(html)[1];
 const directive = name => policy.split(';').map(d => d.trim()).find(d => d.startsWith(name + ' '));
-assert.equal(directive('connect-src'), 'connect-src https://api.typesafe.ai https://openrouter.ai', 'only the two providers can be contacted');
+assert.equal(directive('connect-src'), "connect-src 'self' https://openrouter.ai", 'only this site (its Jev relay) and OpenRouter can be contacted');
 assert.equal(directive('default-src'), "default-src 'none'");
 assert.equal(directive('script-src'), "script-src 'self'");
 assert.equal(directive('form-action'), "form-action 'none'");
 assert.doesNotMatch(html, /<script(?![^>]*\ssrc=)[^>]*>/, 'no inline scripts');
 assert.doesNotMatch(html, /<script[^>]+src="https?:/, 'no third-party scripts');
-assert.match(html, /<body data-mode="browser">/);
+assert.match(html, /<body data-mode="browser" data-jev-endpoint="api\/jev">/);
 const ids = [...html.matchAll(/\sid="([^"]+)"/g)].map(m => m[1]);
 
 class Node {
@@ -47,8 +47,8 @@ const storage = new Map();
 const requests = [];
 let respond = () => { throw new Error('unexpected request'); };
 const context = {
-  document: {getElementById: id => nodes[id], createElement: tag => new Node(tag), body: {dataset: {mode: 'browser'}}, head: new Node('head')},
-  location: {hostname: 'tsale.github.io', protocol: 'https:', origin: 'https://tsale.github.io', hash: ''},
+  document: {getElementById: id => nodes[id], createElement: tag => new Node(tag), body: {dataset: {mode: 'browser', jevEndpoint: 'api/jev'}}, head: new Node('head')},
+  location: {hostname: 'jev-incident-timeline.vercel.app', protocol: 'https:', origin: 'https://jev-incident-timeline.vercel.app', hash: ''},
   localStorage: {getItem: k => storage.has(k) ? storage.get(k) : null, setItem: (k, v) => storage.set(k, String(v)), removeItem: k => storage.delete(k)},
   fetch: async (url, init) => { requests.push({url, init}); return respond(url, init); },
   URL, Date, Set, Map, JSON, Error, TypeError, AbortController, TextEncoder, crypto, performance, setTimeout, clearTimeout, setImmediate, Promise,
@@ -63,7 +63,8 @@ const reply = (status, body) => ({ok: status >= 200 && status < 300, status, tex
 const jev = noul => reply(200, {model: 'jev-1.13.0', usage: {input_tokens: 5, output_tokens: 1},
   answers: {related: {type: 'noul', noul}, evidence: {type: 'choice', choice: noul >= 0.8 ? 'lineage' : 'no_link'}}});
 const scores = {child: 0.94, later: 0.88, unrelated: 0.05};
-const typeSafe = (url, init) => jev(scores[JSON.parse(init.body).state.candidate.id]);
+const typeSafe = (url, init) => jev(scores[JSON.parse(init.body).state.candidate.id] ?? 0.1);
+const choose = mode => { nodes['mode-demo'].checked = mode === 'demo'; nodes['mode-own'].checked = mode === 'own'; nodes[`mode-${mode}`].fire('change'); };
 const type = (id, value) => { nodes[id].value = value; nodes[id].fire('input'); };
 
 (async () => {
@@ -78,7 +79,10 @@ const type = (id, value) => { nodes[id].value = value; nodes[id].fire('input'); 
   nodes['privacy-show'].click();
   assert.equal(nodes['privacy-note'].hidden, false);
   assert.equal(storage.has('casebench.privacyDismissed'), false);
-  assert.match(nodes['key-status'].textContent, /TypeSafe key needed/);
+  // The demo key is the default: no key field, and Analyze works on the bundled example only.
+  assert.equal(nodes['mode-demo'].checked, true);
+  assert.equal(nodes['jev-key-field'].hidden, true);
+  assert.match(nodes['key-status'].textContent, /Demo key \(bundled example only\)/);
 
   // Bundled example loads from the site's own static files; nothing is sent.
   await nodes.preview.click(); await settle();
@@ -86,8 +90,35 @@ const type = (id, value) => { nodes[id].value = value; nodes[id].fire('input'); 
   assert.equal(nodes.seed.value, 'VvT8xKABOYkemEz9sgQR');
   assert.equal(requests.length, 0);
 
-  // Analyze without a key is refused locally.
+  // Demo analysis goes to this site's relay without any key.
   nodes.description.value = 'Confirmed';
+  respond = typeSafe;
+  await nodes.analyze.click(); await settle();
+  assert.ok(requests.length >= 3);
+  assert.ok(requests.every(r => r.url === 'api/jev' && r.init.headers.Authorization === undefined), 'demo requests carry no key');
+  assert.match(nodes.status.textContent, /Jev relatedness received/);
+
+  // A relay refusal is shown as written.
+  nodes.description.value = 'Confirmed again'; nodes.description.fire('input');
+  respond = () => reply(429, {error: 'The demo key is busy for your connection; wait a few minutes or use your own TypeSafe key.', source: 'relay'});
+  await nodes.analyze.click(); await settle();
+  assert.match(nodes.status.textContent, /Analysis failed: The demo key is busy for your connection/);
+
+  // The demo key is refused locally for the visitor's own file.
+  const fixture = fs.readFileSync(path.join(__dirname, '..', 'tests', 'fixtures', 'synthetic.json'), 'utf8');
+  await nodes.file.fire('change', {target: {files: [{size: fixture.length, name: 'synthetic.json', text: async () => fixture}]}});
+  await settle();
+  nodes.seed.value = 'seed'; nodes.seed.fire('change');
+  nodes.description.value = 'Analyst context';
+  requests.length = 0;
+  await nodes.analyze.click(); await settle();
+  assert.match(nodes.status.textContent, /demo key only analyzes the bundled lab example/);
+  assert.equal(requests.length, 0);
+
+  // Own key: the field appears; without a key nothing is sent.
+  choose('own');
+  assert.equal(nodes['jev-key-field'].hidden, false);
+  assert.match(nodes['key-status'].textContent, /TypeSafe key needed/);
   await nodes.analyze.click(); await settle();
   assert.match(nodes.status.textContent, /Enter your TypeSafe API key/);
   assert.equal(requests.length, 0);
@@ -102,16 +133,11 @@ const type = (id, value) => { nodes[id].value = value; nodes[id].fire('input'); 
   assert.equal(nodes['jev-key'].value, '');
   type('jev-key', 'ts-key');
 
-  // A full analysis on the synthetic fixture goes only to TypeSafe, with the key only in the header.
-  const fixture = fs.readFileSync(path.join(__dirname, '..', 'tests', 'fixtures', 'synthetic.json'), 'utf8');
-  await nodes.file.fire('change', {target: {files: [{size: fixture.length, name: 'synthetic.json', text: async () => fixture}]}});
-  await settle();
-  nodes.seed.value = 'seed'; nodes.seed.fire('change');
-  nodes.description.value = 'Analyst context';
+  // A full analysis of the visitor's file goes through the relay with their key, only in the header.
   respond = typeSafe;
   await nodes.analyze.click(); await settle();
   assert.ok(requests.length >= 3);
-  assert.ok(requests.every(r => r.url === 'https://api.typesafe.ai/v1/systemone'));
+  assert.ok(requests.every(r => r.url === 'api/jev'));
   assert.ok(requests.every(r => r.init.headers.Authorization === 'Bearer ts-key' && !r.init.body.includes('ts-key')));
   assert.equal(nodes['page-events'].hidden, false, 'results open the timeline');
   assert.match(nodes.timeline.textContent, /Jev-linked incident execution · 94%/);
@@ -146,11 +172,11 @@ const type = (id, value) => { nodes[id].value = value; nodes[id].fire('input'); 
   assert.match(nodes.status.textContent, /after resume \(1 answer reused\)/);
   assert.ok(requests.length >= 2);
 
-  // A CORS refusal (fetch TypeError) explains itself and offers nothing to resume.
+  // An unreachable relay explains itself and offers nothing to resume.
   nodes.description.value = 'Third run'; nodes.description.fire('input');
   respond = () => { throw new TypeError('Failed to fetch'); };
   await nodes.analyze.click(); await settle();
-  assert.match(nodes.status.textContent, /may not accept requests from websites yet \(CORS\)/);
+  assert.match(nodes.status.textContent, /relay on this site could not be reached/);
   assert.equal(nodes.resume.hidden, true);
-  console.log('Browser site passed: provider-only connection policy, in-memory keys, direct TypeSafe/OpenRouter calls, resume, CORS message.');
+  console.log('Browser site passed: self+OpenRouter connection policy, demo key on the example only, own key via relay, direct OpenRouter, resume.');
 })().catch(error => { console.error(error); process.exit(1); });

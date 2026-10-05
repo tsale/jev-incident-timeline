@@ -215,6 +215,14 @@ td:nth-child(10), td:nth-child(11) { min-width: 120px; white-space: nowrap; }
 .keys-box > .small { margin-top: -10px; color: var(--text-3); }
 label.check { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 500; }
 label.check input { width: 16px; height: 16px; margin: 0; accent-color: var(--accent-fill); }
+.jev-mode { display: grid; gap: 8px; margin: 0; padding: 0; border: 0; min-width: 0; }
+.choice { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 10px; align-items: start; padding: 10px 12px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--inset); font-weight: 400; cursor: pointer; transition: border-color .15s ease, background .15s ease; }
+.choice:hover { border-color: rgba(255,255,255,.26); }
+.choice:has(input:checked) { border-color: var(--accent); background: rgba(122,167,255,.08); }
+.choice input { width: 16px; height: 16px; margin: 3px 0 0; accent-color: var(--accent-fill); }
+.choice strong { display: block; font-size: 14px; font-weight: 600; color: var(--text); }
+.choice .field-hint { margin-top: 1px; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .key-row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 12px; }
 
 @media (max-width: 860px) {

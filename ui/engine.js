@@ -235,14 +235,25 @@
       'The local portal (python3 web_app.py) works in the meantime.'
     : `${label} could not be reached from this browser; check your connection and retry.`);
 
+  // The site's relay (api/jev.js) labels its own refusals so they are shown as written.
+  function relayRefusal(reply) {
+    try { const parsed = JSON.parse(reply.text); return isObj(parsed) && parsed.source === 'relay' && typeof parsed.error === 'string' ? parsed.error.slice(0, 300) : null; }
+    catch { return null; }
+  }
+
   // Ask Jev about one candidate. Temporary 5xx errors and timeouts are retried up to
   // RETRY_BACKOFF_MS.length times; onFailure(attempt, label, retrying, backoffSeconds) sees each failure.
-  async function jev(state, key, {model = MODEL, metadata = null, onFailure = null, fetchImpl = fetch, sleep = defaultSleep, signal = null} = {}) {
+  // endpoint is TypeSafe itself or the site's relay; a null key asks the relay to use its demo key.
+  async function jev(state, key, {model = MODEL, metadata = null, onFailure = null, fetchImpl = fetch, sleep = defaultSleep, signal = null, endpoint = API} = {}) {
     const body = requestBody(state, model);
+    const headers = {'Content-Type': 'application/json', ...(key ? {'Authorization': 'Bearer ' + key} : {})};
+    const direct = endpoint === API;
     let result;
     for (let attempt = 1; ; attempt++) {
-      const reply = await send(API, {method: 'POST', headers: {'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json'}, body}, fetchImpl, signal);
-      if (reply.networkError) throw unreachable('TypeSafe', true);
+      const reply = await send(endpoint, {method: 'POST', headers, body}, fetchImpl, signal);
+      if (reply.networkError) throw direct ? unreachable('TypeSafe', true) : new ProviderError('The Jev relay on this site could not be reached; check your connection and retry.');
+      const refusal = !reply.timedOut && !reply.response.ok && !direct ? relayRefusal(reply) : null;
+      if (refusal) throw new ProviderError(refusal);
       const status = reply.timedOut ? null : reply.response.status;
       if (!reply.timedOut && reply.response.ok) {
         try { result = JSON.parse(reply.text); } catch { throw new ProviderError('TypeSafe returned an unusable Jev answer; no decision was assumed.'); }
@@ -268,7 +279,7 @@
   // failed run can be resumed by passing the same cache with resume=true. An answer is reused only when
   // the candidate, pass, submitted context IDs and the SHA-256 of the exact request all match.
   async function analyze(events, seedId, description, key, {cache = new Map(), resume = false, onProgress = null,
-    model = MODEL, threshold = THRESHOLD, fetchImpl = fetch, sleep = defaultSleep, signal = null} = {}) {
+    model = MODEL, threshold = THRESHOLD, fetchImpl = fetch, sleep = defaultSleep, signal = null, endpoint = API} = {}) {
     const previous = resume ? new Map(cache) : new Map();
     cache.clear();
     const attempts = [], latest = new Map(), retries = [];
@@ -278,7 +289,7 @@
     const judge = async state => {
       metadata = {};
       const callStart = performance.now();
-      const answer = await jev(state, key, {model, metadata, fetchImpl, sleep, signal, onFailure: (attempt, label, retrying, backoff) => {
+      const answer = await jev(state, key, {model, metadata, fetchImpl, sleep, signal, endpoint, onFailure: (attempt, label, retrying, backoff) => {
         const record = {type: 'failed_request', candidate_id: state.candidate.id, request_attempt: attempt, error: label,
           retrying, backoff_seconds: backoff, completed_utc: utcNow(), elapsed_seconds: (performance.now() - callStart) / 1000};
         attempts.push(record);

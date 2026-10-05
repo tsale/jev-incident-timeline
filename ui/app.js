@@ -7,10 +7,13 @@
   const ACCESS_HEADER = 'X-Preview-Access-Code';
   const state = {events: [], rows: [], decisions: new Map(), drafts: new Map(), analysisId: null, resumeOffered: false, resumeCount: 0, busy: false, generation: 0, controller: null,
     accessCode: null, providers: {jev_configured:false, openrouter_configured:false, narrative_model:'deepseek/deepseek-v4.1-flash', access_required:false},
-    keys: {jev:'', openrouter:''}, resumeCache: new Map(), lastRun: null};
+    keys: {jev:'', openrouter:''}, jevMode:'demo', exampleLoaded:false, resumeCache: new Map(), lastRun: null};
   // Static website (site/index.html): keys stay in this tab and requests go straight from the browser
   // to TypeSafe and OpenRouter through ui/engine.js. Without this flag the page talks to web_app.py.
   const BROWSER = document.body?.dataset?.mode === 'browser';
+  // Where the website sends Jev requests: its relay (api/jev.js); without one, TypeSafe directly.
+  const JEV_ENDPOINT = document.body?.dataset?.jevEndpoint || '';
+  const DEMO_AVAILABLE = BROWSER && !!JEV_ENDPOINT;
   const KEY_STORE = 'casebench.keys';
   const NO_DECISIONS = `No ${BROWSER ? 'Jev' : 'server-issued'} decisions. Local preview does not assign relatedness.`;
   const own = (obj, key) => Object.prototype.hasOwnProperty.call(obj, key);
@@ -118,9 +121,12 @@
   }
   // Browser mode: keys typed into this page, optionally remembered in this browser's local storage only.
   function renderKeys() {
-    state.providers = {jev_configured:!!state.keys.jev, openrouter_configured:!!state.keys.openrouter,
+    const demo = state.jevMode === 'demo';
+    state.providers = {jev_configured:demo || !!state.keys.jev, openrouter_configured:!!state.keys.openrouter,
       narrative_model:'deepseek/deepseek-v4.1-flash', access_required:false, example_available:true};
-    $('key-status').textContent = `${state.keys.jev ? 'TypeSafe key entered' : 'TypeSafe key needed for Analyze'} · ${state.keys.openrouter ? 'OpenRouter key entered' : 'OpenRouter key optional'}`;
+    $('jev-key-field').hidden = demo;
+    const jev = demo ? 'Demo key (bundled example only)' : state.keys.jev ? 'TypeSafe key entered' : 'TypeSafe key needed for Analyze';
+    $('key-status').textContent = `${jev} · ${state.keys.openrouter ? 'OpenRouter key entered' : 'OpenRouter key optional'}`;
     $('narrate').disabled = state.busy || !state.analysisId || !state.providers.openrouter_configured;
   }
   function saveKeys() {
@@ -136,6 +142,15 @@
       state.keys = {jev:typeof saved.jev === 'string' ? saved.jev : '', openrouter:typeof saved.openrouter === 'string' ? saved.openrouter : ''};
       $('remember-keys').checked = true;
     }
+    // Start on the demo key unless this browser remembers the visitor's own TypeSafe key.
+    state.jevMode = DEMO_AVAILABLE && !state.keys.jev ? 'demo' : 'own';
+    $('mode-demo').checked = state.jevMode === 'demo';
+    $('mode-own').checked = state.jevMode === 'own';
+    $('mode-demo').disabled = !DEMO_AVAILABLE;
+    for (const id of ['mode-demo', 'mode-own']) $(id).addEventListener('change', () => {
+      state.jevMode = $('mode-own').checked ? 'own' : 'demo';
+      renderKeys();
+    });
     $('jev-key').value = state.keys.jev;
     $('openrouter-key').value = state.keys.openrouter;
     for (const [id, name] of [['jev-key', 'jev'], ['openrouter-key', 'openrouter']]) {
@@ -331,9 +346,10 @@
       target.append(article);
     }
   }
-  function load(input, label) {
+  function load(input, label, example = false) {
     const rows = parseEvents(input);
     resetAnalysis();
+    state.exampleLoaded = example;
     state.resumeCache = new Map();
     state.events = Array.isArray(input) ? input : input.events;
     state.rows = rows;
@@ -485,7 +501,10 @@
     if (!narrate && (!seedId || !description)) { setStatus('Choose a starting execution and enter analyst context.', true); return; }
     if (narrate && !state.analysisId) { setStatus('Analyze first; no server analysis ID exists.', true); return; }
     if (!providersUnlocked()) { setStatus('Unlock provider calls with the preview access code first; nothing was sent.', true); return; }
-    if (BROWSER && !narrate && !state.keys.jev) { setStatus('Enter your TypeSafe API key under Your API keys first; nothing was sent.', true); return; }
+    if (BROWSER && !narrate && state.jevMode === 'own' && !state.keys.jev) { setStatus('Enter your TypeSafe API key first; nothing was sent.', true); return; }
+    if (BROWSER && !narrate && state.jevMode === 'demo' && !state.exampleLoaded) {
+      setStatus('The demo key only analyzes the bundled lab example. Load it, or choose "My own TypeSafe key" to analyze this file; nothing was sent.', true); return;
+    }
     if (!narrate) resetAnalysis();
     const generation = state.generation;
     state.busy = true;
@@ -533,7 +552,9 @@
     state.controller = controller;
     if (kind === 'narrate') return engine.narrate(state.events, [...state.decisions.values()], state.keys.openrouter, {signal:controller.signal});
     if (kind === 'analyze') state.resumeCache = new Map();
-    return engine.analyze(state.events, seedId, description, state.keys.jev, {cache:state.resumeCache, resume:kind === 'resume', signal:controller.signal,
+    const key = state.jevMode === 'own' ? state.keys.jev : null;  // No key: the relay uses the site's demo key.
+    return engine.analyze(state.events, seedId, description, key, {cache:state.resumeCache, resume:kind === 'resume', signal:controller.signal,
+      endpoint:JEV_ENDPOINT || engine.API,
       onProgress:count => { if (generation === state.generation) setStatus(`Asking Jev from this browser… ${count} answer${count === 1 ? '' : 's'} so far`); }});
   }
   function downloadRun() {
@@ -581,7 +602,7 @@
   $('file').addEventListener('change', e => { loadFile(e.target.files[0]); e.target.value = ''; });
   $('preview').addEventListener('click', async () => {
     try {
-      if (BROWSER) { load(await exampleScript(), 'Bundled malicious-events example'); return; }
+      if (BROWSER) { load(await exampleScript(), 'Bundled malicious-events example', true); return; }
       const response = await fetch('/examples/malicious_events.json', {credentials:'omit', cache:'no-store'});
       if (!response.ok) throw Error('Bundled example unavailable on this local server.');
       const body = await response.text();
