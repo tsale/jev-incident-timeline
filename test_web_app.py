@@ -66,6 +66,47 @@ class WebAppTests(unittest.TestCase):
         self.assertEqual(payload[2]['registry']['path'], 'HKU\\Example\\UserInitMprLogonScript')
         self.assertEqual(payload[2]['target']['image'], 'C:\\Windows\\System32\\sihost.exe')
 
+    def test_narrative_input_says_how_each_event_is_linked(self):
+        decisions = [{'id': 'seed', 'related': True, 'probability': 1.0, 'reason': 'Confirmed starting execution (user-provided)'},
+                     {'id': 'child', 'related': True, 'probability': .94, 'reason': 'lineage (Jev-selected category; not generated prose)'}]
+        links = {e['id']: e['link'] for e in web_app.timeline_input(self.events, decisions)}
+        self.assertEqual(links, {'seed': {'type': 'confirmed_seed'},
+                                 'file-1': {'type': 'same_process_as', 'event_id': 'seed'},
+                                 'child': {'type': 'jev_linked', 'probability': .94, 'basis': 'lineage'}})
+
+    def test_narrative_attack_mapping_and_chain_are_validated(self):
+        allowed = {'seed', 'child'}
+        rows = web_app.validate_timeline({'timeline': [
+            {'event_id': 'seed', 'title': 'x', 'summary': 'x', 'evidence_ids': ['seed'], 'tactic': 'execution', 'techniques': ['t1059.003', 'T1059.003', 'bogus', 'T12']},
+            {'event_id': 'child', 'title': 'x', 'summary': 'x', 'evidence_ids': ['child'], 'tactic': 'Made-up tactic', 'techniques': 'T1055'}]}, allowed)
+        self.assertEqual([(r['tactic'], r['tactic_id'], r['techniques']) for r in rows],
+                         [('Execution', 'TA0002', ['T1059.003']), ('', '', [])])
+        self.assertEqual(web_app.attack_mapping({'tactic': 'TA0011'})['tactic'], 'Command and Control')
+        chain = web_app.clean_chain('- **cmd.exe** [evt:seed] spawned [evt:invented]', allowed)
+        self.assertEqual(chain, '- **cmd.exe** [evt:seed] spawned [unknown event]')
+        self.assertEqual(web_app.clean_chain(None, allowed), '')
+        with self.assertRaises(ValueError):
+            web_app.clean_chain('x' * (web_app.MAX_CHAIN + 1), allowed)
+
+    def test_narrative_uses_the_chosen_model_and_returns_the_chain(self):
+        class Response:
+            def __enter__(self): return self
+            def __exit__(self, *args): return None
+            def read(self):
+                return json.dumps({'model': 'anthropic/claude-sonnet-5.5', 'choices': [{'finish_reason': 'stop', 'message': {'content': json.dumps({
+                    'timeline': [{'event_id': 'seed', 'title': 'Seed', 'summary': 'Seed ran', 'evidence_ids': ['seed'], 'tactic': 'Execution', 'techniques': ['T1059']}],
+                    'execution_chain': '- **cmd.exe** [evt:seed]'})}}]}).encode()
+        with patch.object(web_app, 'urlopen', return_value=Response()) as send:
+            result = web_app.narrate([{'id': 'seed'}], 'k', 'anthropic/claude-sonnet-5.5')
+        self.assertEqual(json.loads(send.call_args.args[0].data)['model'], 'anthropic/claude-sonnet-5.5')
+        self.assertIn('ATT&CK summary', json.loads(send.call_args.args[0].data)['messages'][0]['content'])
+        self.assertEqual(result['execution_chain'], '- **cmd.exe** [evt:seed]')
+        self.assertEqual(result['timeline'][0]['tactic_id'], 'TA0002')
+        self.assertEqual(result['model'], 'anthropic/claude-sonnet-5.5')
+        for bad in ('', 'no-slash', 'a/b c', 'x' * 121 + '/y', 'https://evil/x'):
+            with self.assertRaises(web_app.InputError):
+                web_app.narrate([{'id': 'seed'}], 'k', bad)
+
     def test_narrative_rejects_fabricated_event_and_evidence_ids(self):
         allowed = {'seed', 'child'}
         with self.assertRaises(ValueError):
@@ -96,7 +137,7 @@ class WebAppTests(unittest.TestCase):
             def read(self): return json.dumps(self.result).encode()
         def fake_urlopen(request, timeout):
             budget = json.loads(request.data)['max_tokens']
-            if budget == 4096:
+            if budget == 8192:
                 output = {'choices':[{'finish_reason':'length','message':{'content':None, 'reasoning':'omitted'}}]}
             else:
                 output = {'choices':[{'finish_reason':'stop','message':{'content':json.dumps({'timeline':[{'event_id':'seed','title':'Seed','summary':'Confirmed seed','evidence_ids':['seed']}]})}}]}

@@ -7,7 +7,8 @@
   const ACCESS_HEADER = 'X-Preview-Access-Code';
   const state = {events: [], rows: [], decisions: new Map(), drafts: new Map(), analysisId: null, resumeOffered: false, resumeCount: 0, busy: false, generation: 0, controller: null,
     accessCode: null, providers: {jev_configured:false, openrouter_configured:false, narrative_model:'deepseek/deepseek-v4.1-flash', access_required:false},
-    keys: {jev:'', openrouter:''}, jevMode:'demo', exampleLoaded:false, resumeCache: new Map(), lastRun: null};
+    keys: {jev:'', openrouter:''}, jevMode:'demo', exampleLoaded:false, resumeCache: new Map(), lastRun: null,
+    chain: '', draftModel: '', chainJevView: false, chainMarkdown: ''};
   // Static website (site/index.html): keys stay in this tab and requests go straight from the browser
   // to TypeSafe and OpenRouter through ui/engine.js. Without this flag the page talks to web_app.py.
   const BROWSER = document.body?.dataset?.mode === 'browser';
@@ -15,6 +16,10 @@
   const JEV_ENDPOINT = document.body?.dataset?.jevEndpoint || '';
   const DEMO_AVAILABLE = BROWSER && !!JEV_ENDPOINT;
   const KEY_STORE = 'casebench.keys';
+  const MODEL_STORE = 'casebench.model';
+  const DEFAULT_MODEL = 'deepseek/deepseek-v4.1-flash';
+  const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._:-]*$/;
+  const PAGES = ['setup', 'events', 'chain', 'table'];
   const NO_DECISIONS = `No ${BROWSER ? 'Jev' : 'server-issued'} decisions. Local preview does not assign relatedness.`;
   const own = (obj, key) => Object.prototype.hasOwnProperty.call(obj, key);
   const object = x => x !== null && typeof x === 'object' && !Array.isArray(x);
@@ -77,18 +82,12 @@
     if (value !== undefined) node.textContent = text(value);
     return node;
   }
-  function appendField(dl, label, value) {
-    if (value === undefined || value === null || value === '') return;
-    const div = element('div');
-    div.append(element('dt', '', label), element('dd', '', Array.isArray(value) ? value.join(', ') : value));
-    dl.append(div);
-  }
   function setStatus(message, error = false) {
     $('status').textContent = message;
     $('status').classList.toggle('error', error);
   }
   function page(name) {
-    for (const id of ['setup', 'events', 'table']) {
+    for (const id of PAGES) {
       $(`page-${id}`).hidden = id !== name;
       $(`nav-${id}`).setAttribute('aria-selected', String(id === name));
     }
@@ -208,6 +207,7 @@
     state.analysisId = null;
     state.decisions.clear();
     state.drafts.clear();
+    state.chain = ''; state.draftModel = ''; state.chainJevView = false;
     state.busy = false;
     state.resumeOffered = false;
     state.lastRun = null;
@@ -260,90 +260,284 @@
     const when = decision.reused.answered_utc;
     return typeof when === 'string' && when ? `Reused from earlier run · answered ${when}` : 'Reused from earlier run';
   }
+  const pct = p => `${(p * 100).toFixed(0)}%`;
+  const hostOf = row => field(row.src.host, 'name') || row.src.host;
+  const actionOf = row => field(field(row.src, 'event'), 'action') || row.src.action || row.kind;
+  const labelOf = row => row.process.name || field(row.src, 'name') || field(row.src, 'file')?.path || text(row.kind);
+  const basisOf = decision => typeof decision?.reason === 'string' ? decision.reason.split(' (')[0] : '';
+  // How a row belongs to the incident: the confirmed seed, a Jev-linked execution, or activity of one of those processes.
+  function originOf(row, links) {
+    if (row.id === $('seed').value) return {kind:'seed', label:'Confirmed seed', score:'Seed · 100%'};
+    const decision = state.decisions.get(row.id);
+    if (decision?.related) return {kind:'related', label:'Jev-linked', decision,
+      score:typeof decision.probability === 'number' ? `Jev ${pct(decision.probability)}` : 'Jev score unavailable'};
+    const context = contextFor(row, links);
+    return context ? {kind:'context', label:'Same process', score:'Same process', context} : null;
+  }
+  function observedPhase(row) {
+    const category = String(row.kind).toLowerCase(), action = String(actionOf(row)).toLowerCase();
+    return row.execution ? 'Process start' : action.includes('remotethread') ? 'Process interaction'
+      : category.includes('network') ? 'Network' : category.includes('registry') || category.includes('configuration') ? 'Registry'
+        : category.includes('file') ? 'File' : category.includes('process') ? 'Process activity' : text(row.kind);
+  }
+  // ATT&CK tactic and technique chips from an AI draft; techniques link to attack.mitre.org.
+  function attackChips(draft, withTactic = true) {
+    const wrap = element('span', 'attack');
+    if (withTactic && draft?.tactic) wrap.append(element('span', 'chip tactic', draft.tactic_id ? `${draft.tactic} · ${draft.tactic_id}` : draft.tactic));
+    for (const id of Array.isArray(draft?.techniques) ? draft.techniques : []) {
+      const link = element('a', 'chip technique', id);
+      link.href = `https://attack.mitre.org/techniques/${id.replace('.', '/')}/`;
+      link.target = '_blank'; link.rel = 'noopener noreferrer';
+      wrap.append(link);
+    }
+    return wrap;
+  }
+  // Every results tab says whether it shows pure Jev results or an AI-enriched draft.
+  function renderEnrichment() {
+    const ai = state.drafts.size > 0;
+    for (const id of ['timeline-banner', 'chain-banner', 'table-banner']) {
+      const banner = $(id);
+      banner.hidden = !state.analysisId;
+      banner.className = `enrichment ${ai ? 'ai' : 'jev'}`;
+      banner.replaceChildren(element('strong', '', ai ? 'AI-enriched draft' : 'Jev results only · no AI enrichment'),
+        element('span', '', ai
+          ? `Titles, summaries, ATT&CK tactics and techniques${state.chain ? ' and the execution chain' : ''} were drafted by ${state.draftModel || 'the narrative model'} from these Jev results. Verify every claim against the evidence.`
+          : 'Rows, scores and links come straight from Jev and exact process-entity matches. Request a narrative to add AI-drafted titles, ATT&CK tactics and techniques, and an execution chain.'));
+    }
+  }
   function renderTable() {
     const target = $('table-body'); target.replaceChildren();
     const links = linkedProcessContext();
     const visible = linkedRows(links);
-    $('table-count').textContent = `${visible.length} linked row${visible.length === 1 ? '' : 's'}`;
+    $('table-count').textContent = `${visible.length} linked of ${state.rows.length} source event${state.rows.length === 1 ? '' : 's'}`;
     const contextCount = state.rows.filter(row => contextFor(row, links)).length;
     const related = [...state.decisions.values()].filter(d => d.id !== $('seed').value && d.related).length;
     const evaluated = [...state.decisions.values()].filter(d => d.id !== $('seed').value).length;
     const summary = $('table-summary'); summary.replaceChildren();
     for (const label of [`${state.rows.length} source events`, `${state.rows.filter(r => r.execution).length} process starts`,
-      `${evaluated} Jev decisions`, `${related} related`, `${contextCount} entity-linked context`, `${visible.length} incident rows`]) summary.append(element('span', 'metric', label));
+      `${evaluated} Jev decisions`, `${related} related`, `${contextCount} same-process events`, `${visible.length} incident rows`]) summary.append(element('span', 'metric', label));
     $('table-guidance').textContent = !state.rows.length ? 'Load an export to begin.' : state.analysisId
-      ? `Jev assessment complete for ${evaluated} execution candidate${evaluated === 1 ? '' : 's'}. ${contextCount} other events share a host and process entity ID with the seed or a related execution; these are linked context, not Jev-scored verdicts. ${state.drafts.size ? 'DeepSeek draft received; verify cited claims.' : 'Request a separate DeepSeek draft on Source & analysis if needed.'}`
-      : 'Local preview only. OpenRouter being ready does not assess events. Go to Source & analysis, enter analyst context, then click Analyze with Jev.';
+      ? `Jev assessed ${evaluated} execution candidate${evaluated === 1 ? '' : 's'}; ${contextCount} other events come from the same processes (exact host and entity match, not Jev-scored). ${state.drafts.size ? `AI draft from ${state.draftModel}; verify cited claims.` : 'Request a narrative on Source & analysis for AI-drafted titles and ATT&CK mapping.'}`
+      : 'Local preview only. Go to Source & analysis, enter analyst context, then click Analyze with Jev.';
     for (const row of visible) {
-      const decision = state.decisions.get(row.id), draft = state.drafts.get(row.id);
-      const context = contextFor(row, links);
-      const seed = row.id === $('seed').value;
-      const action = field(field(row.src, 'event'), 'action') || row.src.action || row.kind;
+      const origin = originOf(row, links), draft = state.drafts.get(row.id);
+      const seed = origin.kind === 'seed', context = origin.context;
+      const action = actionOf(row);
       const [indicator, type, pyramid] = indicatorFor(row);
-      const title = draft ? draft.title : `${text(row.process.name || row.kind)} · ${text(action)}`;
-      const description = draft ? `${draft.summary} [DeepSeek draft; verify cited evidence]` :
-        `${text(row.process.name || row.kind)}: ${text(action)}${indicator ? ` · ${indicator}` : ''}. ${seed ? 'Analyst-confirmed starting process' : context ? `Same process entity as ${context.id}` : `Jev selected basis: ${text(decision?.reason)}`}. Evidence ID: ${row.id}.`;
-      const score = seed ? '100% · analyst confirmed' : context
-        ? `100% · entity match${!context.seed && state.decisions.get(context.id)?.probability !== undefined ? ` · Jev-linked execution ${(state.decisions.get(context.id).probability * 100).toFixed(0)}%` : ''}`
-        : typeof decision?.probability === 'number' ? `${(decision.probability * 100).toFixed(0)}% · Jev relatedness` : 'Jev score unavailable';
-      const tr = element('tr');
+      const tr = element('tr', `origin-${origin.kind}`);
       tr.sourceEventId = row.id;
+      const phaseCell = element('td');
+      phaseCell.append(draft?.tactic ? element('span', 'chip tactic', draft.tactic_id ? `${draft.tactic} · ${draft.tactic_id}` : draft.tactic)
+        : element('span', 'chip phase', observedPhase(row)));
       const titleCell = element('td');
-      titleCell.append(element('span', 'row-title', title), element('span', 'row-origin', score),
-        element('span', 'row-origin', seed ? 'Confirmed seed' : context ? (context.seed ? 'Context · confirmed seed' : 'Context · related execution') : 'Related · review'));
-      const reused = !seed && !context ? reusedLabel(decision) : '';
+      titleCell.append(element('span', 'row-title', draft ? draft.title : `${text(labelOf(row))} · ${text(action)}`),
+        element('span', `pill ${origin.kind}`, origin.score));
+      const reused = !seed && !context ? reusedLabel(origin.decision) : '';
       if (reused) titleCell.append(element('span', 'row-origin reused', reused));
-      const category = String(row.kind).toLowerCase(), actionText = String(action).toLowerCase();
-      const phase = row.execution ? 'Execution' : actionText.includes('remotethread') ? 'Process Interaction'
-        : category.includes('network') ? 'Network Activity' : category.includes('registry') || category.includes('configuration') ? 'Registry Activity'
-          : category.includes('file') ? 'File Activity' : '';
-      tr.append(element('td', 'mono', row.time || ''), element('td', '', field(row.src.host, 'name') || row.src.host || ''),
-        element('td', '', phase), titleCell, element('td', '', description), element('td', '', row.process.name || ''),
-        element('td', '', ''), element('td', 'mono', row.process.command_line || ''), element('td', 'mono', indicator),
+      const description = draft ? element('span', '', draft.summary)
+        : element('span', '', `${text(labelOf(row))}: ${text(action)}${indicator ? ` · ${indicator}` : ''}. ${seed ? 'Analyst-confirmed starting process.' : context ? `Same process as ${context.id}.` : `Jev basis: ${text(basisOf(origin.decision))}.`}`);
+      const descriptionCell = element('td');
+      descriptionCell.append(description);
+      if (draft) descriptionCell.append(element('span', 'ai-badge inline', 'AI draft'));
+      const ttpCell = element('td');
+      if (draft?.techniques?.length) ttpCell.append(attackChips(draft, false));
+      else { ttpCell.append(element('span', 'muted', '—')); ttpCell.title = draft ? 'No technique supported by this event' : 'Request a narrative to draft ATT&CK techniques'; }
+      tr.append(element('td', 'mono', row.time || ''), element('td', '', hostOf(row) || ''), phaseCell, titleCell, descriptionCell,
+        element('td', '', row.process.name || ''), ttpCell, element('td', 'mono', row.process.command_line || ''), element('td', 'mono', indicator),
         element('td', '', type), element('td', '', pyramid));
       target.append(tr);
     }
+    renderEnrichment();
+    renderChain();
   }
   function renderTimeline() {
     const target = $('timeline');
     target.replaceChildren();
     const links = linkedProcessContext();
     const visible = linkedRows(links);
-    $('count').textContent = `${visible.length} linked event${visible.length === 1 ? '' : 's'}`;
+    $('count').textContent = `${visible.length} linked of ${state.rows.length} source event${state.rows.length === 1 ? '' : 's'}`;
     if (!visible.length) target.append(element('div', 'empty', state.rows.length
       ? 'No linked events yet. Confirm the starting execution and analyst context on Source & analysis, then click Analyze with Jev.'
       : 'No linked events yet. Import source events, confirm a starting execution and analyze with Jev to build this sequence.'));
     for (const row of visible) {
-      const position = state.rows.findIndex(e => e.id === row.id);
-      const article = element('article', 'event');
-      article.id = `event-${position}`;
-      const head = element('div', 'event-header');
-      head.append(element('span', 'tag', row.execution ? 'Process start' : text(row.kind)));
-      const decision = state.decisions.get(row.id);
-      const context = contextFor(row, links);
-      if (row.id === $('seed').value) head.append(element('span', 'tag seed', 'Analyst-confirmed malicious seed · 100%'));
-      else if (decision) head.append(element('span', 'tag related', `Jev-linked incident execution · ${typeof decision.probability === 'number' ? `${(decision.probability * 100).toFixed(0)}%` : 'score unavailable'}`));
-      else if (context) head.append(element('span', 'tag context', 'Incident process activity · exact entity match'));
-      const reused = row.id !== $('seed').value && decision ? reusedLabel(decision) : '';
-      if (reused) head.append(element('span', 'tag reused', reused));
-      const proc = row.process, host = field(row.src, 'host'), user = field(row.src, 'user');
-      const label = proc.name || field(row.src, 'name') || field(row.src, 'file')?.path || text(row.kind);
+      const origin = originOf(row, links), draft = state.drafts.get(row.id);
+      const article = element('article', `event ${origin.kind}`);
+      article.id = `event-${state.rows.findIndex(e => e.id === row.id)}`;
+      const line = element('div', 'event-line');
+      // Activity rows lead with their process name, or else the kind of event; the artifact goes on the detail line.
+      const action = actionOf(row), name = row.execution ? labelOf(row) : row.process.name || observedPhase(row);
+      line.append(element('span', `dot ${origin.kind}`), element('strong', 'event-name', name), element('span', `pill ${origin.kind}`, origin.score),
+        element('span', 'event-action', row.execution ? 'process start' : action && action !== row.kind ? `${text(row.kind)} · ${text(action)}` : text(row.kind)));
+      const reused = origin.kind === 'related' ? reusedLabel(origin.decision) : '';
+      if (reused) line.append(element('span', 'pill reused', reused));
       const body = element('div', 'event-body');
-      body.append(head, element('h3', '', label));
-      if (proc.command_line) body.append(element('p', 'command', proc.command_line));
-      if (row.id === $('seed').value) body.append(element('p', '', 'Analyst-confirmed malicious starting execution. The 100% display reflects analyst confirmation, not a Jev prediction.'));
-      else if (decision) body.append(element('p', '', `Jev relatedness: ${typeof decision.probability === 'number' ? `${(decision.probability * 100).toFixed(0)}%` : 'not supplied'} · ${text(decision.reason)}. Not a maliciousness verdict.`));
-      else if (context) body.append(element('p', '', `Same host and process entity ID as ${context.id}; activity by an incident-linked process, not independently Jev-scored. Individual artifacts are not thereby independently malicious.`));
-      const dl = element('dl');
-      appendField(dl, 'Event ID', row.id);
-      appendField(dl, 'Entity ID', proc.entity_id);
-      appendField(dl, 'Parent entity ID', field(proc.parent, 'entity_id'));
-      appendField(dl, 'Host', object(host) ? host.name : host);
-      appendField(dl, 'User', object(user) ? user.name : user);
-      appendField(dl, 'Action', field(field(row.src, 'event'), 'action') || row.src.action);
-      body.append(dl);
+      body.append(line);
+      if (draft) {
+        const ai = element('p', 'ai-line');
+        ai.append(element('span', 'ai-badge', 'AI'), element('span', '', `${draft.title}: ${draft.summary}`));
+        body.append(ai);
+        if (draft.tactic || draft.techniques?.length) body.append(attackChips(draft));
+      }
+      const [indicator] = indicatorFor(row);
+      const detail = row.process.command_line || (!row.execution ? indicator : '');
+      if (detail) body.append(element('code', 'event-detail', detail));
+      const meta = [hostOf(row), field(row.src.user, 'name') || row.src.user, row.process.pid !== undefined ? `PID ${row.process.pid}` : '',
+        origin.context ? `same process as ${origin.context.id}` : '', `event ${row.id}`].filter(x => typeof x === 'string' ? x : x !== undefined && x !== null);
+      body.append(element('p', 'event-meta', meta.join(' · ')));
       article.append(element('time', 'event-time', row.time || 'Time unavailable'), body);
       target.append(article);
+    }
+  }
+
+  // Process-to-process chain built only from Jev decisions and exact entity matches (no AI), as Markdown.
+  function processChainMarkdown() {
+    if (!state.analysisId) return '';
+    const links = linkedProcessContext(), visible = linkedRows(links), seedId = $('seed').value;
+    const position = new Map(state.rows.map((row, i) => [row.id, i]));
+    const keyOf = row => row.process.entity_id ? JSON.stringify([hostOf(row), row.process.entity_id]) : null;
+    const execs = visible.filter(row => row.execution);
+    // Duplicate records of one process start (same host, name, PID and time) fold into the one with an entity ID.
+    const twinOf = new Map();
+    for (const row of execs) {
+      const twin = execs.find(other => other !== row && other.process.entity_id && !row.process.entity_id && other.time === row.time &&
+        other.process.name === row.process.name && other.process.pid === row.process.pid && hostOf(other) === hostOf(row));
+      if (twin) twinOf.set(row.id, twin);
+    }
+    const nodes = execs.filter(row => !twinOf.has(row.id));
+    const byKey = new Map(nodes.filter(keyOf).map(row => [keyOf(row), row]));
+    const items = new Map(nodes.map(row => [row.id, []]));  // process -> its children and activity, in time order
+    const roots = [];
+    for (const row of nodes) {
+      const parentId = field(row.process.parent, 'entity_id');
+      const parent = parentId ? byKey.get(JSON.stringify([hostOf(row), parentId])) : null;
+      if (parent && parent !== row) items.get(parent.id).push({row, child:true}); else roots.push(row);
+    }
+    for (const row of visible) if (!row.execution && contextFor(row, links) && byKey.get(keyOf(row))) items.get(byKey.get(keyOf(row)).id).push({row, child:false});
+    for (const list of items.values()) list.sort((a, b) => position.get(a.row.id) - position.get(b.row.id));
+    const plain = value => String(value).replace(/`/g, "'").replace(/\*\*/g, '* *');
+    const lines = ['## Process chain from Jev results', '',
+      `${nodes.length} linked process${nodes.length === 1 ? '' : 'es'} and ${visible.length - execs.length} same-process event${visible.length - execs.length === 1 ? '' : 's'}, built from Jev decisions and exact process-entity matches. No AI.`, ''];
+    const walk = (row, depth, seen) => {
+      if (seen.has(row.id)) return;
+      seen.add(row.id);
+      const pad = '  '.repeat(depth), decision = state.decisions.get(row.id);
+      const how = row.id === seedId ? 'confirmed seed' : typeof decision?.probability === 'number'
+        ? `Jev ${pct(decision.probability)}${basisOf(decision) ? ` (${basisOf(decision)})` : ''}` : 'Jev-linked';
+      lines.push(`${pad}- **${plain(labelOf(row))}**${row.process.pid !== undefined ? ` (PID ${plain(row.process.pid)})` : ''} · ${how} · ${plain(row.time || 'time unavailable')} [evt:${row.id}]`);
+      if (row.process.command_line) lines.push(`${pad}  - \`${plain(row.process.command_line)}\``);
+      const twins = execs.filter(other => twinOf.get(other.id) === row);
+      if (twins.length) lines.push(`${pad}  - Also recorded as ${twins.map(t => `[evt:${t.id}]`).join(', ')}`);
+      for (const item of items.get(row.id)) {
+        if (item.child) { walk(item.row, depth + 1, seen); continue; }
+        const [indicator] = indicatorFor(item.row);
+        lines.push(`${pad}  - ${plain(text(item.row.kind))}: ${plain(text(actionOf(item.row)))}${indicator ? ` · \`${plain(indicator)}\`` : ''} [evt:${item.row.id}]`);
+      }
+    };
+    const seen = new Set();
+    for (const root of roots.sort((a, b) => (a.id !== seedId) - (b.id !== seedId) || position.get(a.id) - position.get(b.id))) walk(root, 0, seen);
+    return lines.join('\n');
+  }
+  function renderChain() {
+    const jevOnly = processChainMarkdown();
+    const showAi = !!state.chain && !state.chainJevView;
+    const markdown = showAi ? state.chain : jevOnly;
+    state.chainMarkdown = markdown;
+    $('chain-source').textContent = !markdown ? '' : showAi ? `AI draft · ${state.draftModel}` : 'From Jev results · no AI';
+    $('chain-toggle').hidden = !state.chain;
+    $('chain-toggle').textContent = showAi ? 'Show Jev-only chain' : 'Show AI draft';
+    $('copy-chain').hidden = !markdown;
+    if (!markdown) {
+      $('chain').replaceChildren(element('div', 'empty', 'No execution chain yet. Analyze with Jev to build the process chain; a narrative adds an AI-drafted version with ATT&CK mapping.'));
+      return;
+    }
+    renderMarkdown($('chain'), markdown);
+  }
+
+  // Minimal, safe Markdown: headings, nested lists, tables, code, bold, rules and [evt:ID] citations.
+  // Builds DOM nodes with textContent only, so drafted text can never become markup or script.
+  function renderInline(parent, value) {
+    const pattern = /(`[^`]+`|\*\*[^*]+\*\*|\[evt:[^\]\s]+\])/g;
+    let last = 0, match;
+    while ((match = pattern.exec(value))) {
+      if (match.index > last) parent.append(element('span', '', value.slice(last, match.index)));
+      const token = match[0];
+      if (token[0] === '`') parent.append(element('code', '', token.slice(1, -1)));
+      else if (token.startsWith('**')) parent.append(element('strong', '', token.slice(2, -2)));
+      else {
+        const id = token.slice(5, -1), index = state.rows.findIndex(row => row.id === id);
+        const link = element('a', 'evt-ref', id);
+        link.href = `#event-${index}`;
+        link.addEventListener('click', () => page('events'));
+        parent.append(link);
+      }
+      last = pattern.lastIndex;
+    }
+    if (last < value.length) parent.append(element('span', '', value.slice(last)));
+  }
+  function renderMarkdown(target, markdown) {
+    target.replaceChildren();
+    const lines = markdown.replace(/\r\n?/g, '\n').split('\n');
+    const cells = line => line.trim().replace(/^\||\|$/g, '').split('|').map(cell => cell.trim());
+    let stack = [], paragraph = null;
+    const closeBlocks = () => { stack = []; paragraph = null; };
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      if (!line.trim()) { closeBlocks(); continue; }
+      if (line.trim().startsWith('```')) {
+        closeBlocks();
+        const code = [];
+        while (++i < lines.length && !lines[i].trim().startsWith('```')) code.push(lines[i]);
+        const pre = element('pre');
+        pre.append(element('code', '', code.join('\n') || ' '));
+        target.append(pre);
+        continue;
+      }
+      const heading = /^(#{1,6})\s+(.*)$/.exec(line);
+      if (heading) {
+        closeBlocks();
+        const node = element(heading[1].length === 1 ? 'h3' : heading[1].length === 2 ? 'h4' : 'h5');
+        renderInline(node, heading[2]);
+        target.append(node);
+        continue;
+      }
+      if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(line)) { closeBlocks(); target.append(element('hr')); continue; }
+      if (line.trim().startsWith('|') && i + 1 < lines.length && /^\s*\|?\s*:?-{3,}/.test(lines[i + 1])) {
+        closeBlocks();
+        const table = element('table'), head = element('thead'), body = element('tbody'), headRow = element('tr');
+        for (const cell of cells(line)) { const th = element('th'); renderInline(th, cell); headRow.append(th); }
+        head.append(headRow);
+        i++;
+        while (i + 1 < lines.length && lines[i + 1].trim().startsWith('|')) {
+          const tr = element('tr');
+          for (const cell of cells(lines[++i])) { const td = element('td'); renderInline(td, cell); tr.append(td); }
+          body.append(tr);
+        }
+        table.append(head, body);
+        const wrap = element('div', 'md-table');
+        wrap.append(table);
+        target.append(wrap);
+        continue;
+      }
+      const item = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/.exec(line);
+      if (item) {
+        paragraph = null;
+        const indent = item[1].replace(/\t/g, '    ').length;
+        while (stack.length && indent < stack[stack.length - 1].indent) stack.pop();
+        if (!stack.length || indent > stack[stack.length - 1].indent) {
+          const list = element(/\d/.test(item[2]) ? 'ol' : 'ul');
+          (stack.length && stack[stack.length - 1].last ? stack[stack.length - 1].last : target).append(list);
+          stack.push({indent, list, last:null});
+        }
+        const li = element('li');
+        renderInline(li, item[3]);
+        stack[stack.length - 1].list.append(li);
+        stack[stack.length - 1].last = li;
+        continue;
+      }
+      if (stack.length && /^\s+/.test(line)) { renderInline(stack[stack.length - 1].last, ` ${line.trim()}`); continue; }
+      stack = [];
+      if (!paragraph) { paragraph = element('p'); target.append(paragraph); } else paragraph.append(element('span', '', ' '));
+      renderInline(paragraph, line.trim());
     }
   }
   function load(input, label, example = false) {
@@ -450,9 +644,12 @@
   }
   function validateNarrative(result) {
     if (!Array.isArray(result.timeline)) throw Error('Narrative response is missing a timeline array.');
+    if (result.execution_chain !== undefined && typeof result.execution_chain !== 'string') throw Error('Narrative execution chain is not text.');
     const known = new Set(state.rows.map(r => r.id));
     for (const entry of result.timeline) {
-      if (!object(entry) || typeof entry.event_id !== 'string' || !known.has(entry.event_id) || typeof entry.title !== 'string' || typeof entry.summary !== 'string' || !Array.isArray(entry.evidence_ids) || !entry.evidence_ids.every(id => typeof id === 'string' && known.has(id))) {
+      if (!object(entry) || typeof entry.event_id !== 'string' || !known.has(entry.event_id) || typeof entry.title !== 'string' || typeof entry.summary !== 'string' || !Array.isArray(entry.evidence_ids) || !entry.evidence_ids.every(id => typeof id === 'string' && known.has(id)) ||
+          (entry.tactic !== undefined && typeof entry.tactic !== 'string') || (entry.tactic_id !== undefined && typeof entry.tactic_id !== 'string') ||
+          (entry.techniques !== undefined && (!Array.isArray(entry.techniques) || !entry.techniques.every(t => typeof t === 'string' && /^T\d{4}(\.\d{3})?$/.test(t))))) {
         throw Error('Narrative contains missing fields or evidence IDs absent from this source.');
       }
     }
@@ -482,7 +679,10 @@
     }
     if (!result.timeline.length) target.append(element('p', 'note', 'No narrative entries returned.'));
     state.drafts = new Map(result.timeline.map(item => [item.event_id, item]));
-    renderTable();
+    state.chain = result.execution_chain || '';
+    state.draftModel = typeof result.model === 'string' && result.model ? result.model : narrativeModel();
+    state.chainJevView = false;
+    renderTimeline(); renderTable();
   }
   function offerResume(count) {
     state.resumeOffered = true; state.resumeCount = count;
@@ -500,6 +700,7 @@
     const description = $('description').value.trim();
     if (!narrate && (!seedId || !description)) { setStatus('Choose a starting execution and enter analyst context.', true); return; }
     if (narrate && !state.analysisId) { setStatus('Analyze first; no server analysis ID exists.', true); return; }
+    if (narrate && !MODEL_ID.test(narrativeModel())) { setStatus('Narrative model must be an OpenRouter model ID, for example deepseek/deepseek-v4.1-flash.', true); return; }
     if (!providersUnlocked()) { setStatus('Unlock provider calls with the preview access code first; nothing was sent.', true); return; }
     if (BROWSER && !narrate && state.jevMode === 'own' && !state.keys.jev) { setStatus('Enter your TypeSafe API key first; nothing was sent.', true); return; }
     if (BROWSER && !narrate && state.jevMode === 'demo' && !state.exampleLoaded) {
@@ -513,10 +714,13 @@
       : BROWSER ? 'Sending events from this browser directly to TypeSafe…' : 'Sending events to the configured local backend…');
     try {
       const result = BROWSER ? await browserRun(kind, generation, seedId, description)
-        : narrate ? await post('/api/narrate', {analysis_id:state.analysisId}, generation)
+        : narrate ? await post('/api/narrate', {analysis_id:state.analysisId, model:narrativeModel()}, generation)
         : await post('/api/analyze', {events:state.events, seed_id:seedId, description, ...(resuming ? {resume:true} : fresh ? {fresh:true} : {})}, generation);
       if (generation !== state.generation) return;
-      if (narrate) { validateNarrative(result); renderNarrative(result); page('table'); setStatus('Narrative received; verify every claim against evidence.'); }
+      if (narrate) {
+        validateNarrative(result); renderNarrative(result); page(state.chain ? 'chain' : 'table');
+        setStatus(`Narrative drafted by ${state.draftModel}; verify every claim against the evidence.`);
+      }
       else {
         const decisions = validateDecisions(result);
         state.decisions = decisions;
@@ -545,12 +749,22 @@
       }
     }
   }
+  // Narrative model: any OpenRouter model ID, remembered in this browser (it is not a secret).
+  const narrativeModel = () => $('narrative-model').value.trim() || DEFAULT_MODEL;
+  function setupModel() {
+    let saved = '';
+    try { saved = localStorage.getItem(MODEL_STORE) || ''; } catch { saved = ''; }
+    $('narrative-model').value = MODEL_ID.test(saved) ? saved : DEFAULT_MODEL;
+    $('narrative-model').addEventListener('input', () => {
+      try { narrativeModel() === DEFAULT_MODEL ? localStorage.removeItem(MODEL_STORE) : localStorage.setItem(MODEL_STORE, narrativeModel()); } catch { /* Not remembered. */ }
+    });
+  }
   // Browser mode runs the ported engine here; results have the same shape as /api/analyze and /api/narrate.
   async function browserRun(kind, generation, seedId, description) {
     const engine = globalThis.JevEngine;
     const controller = new AbortController();
     state.controller = controller;
-    if (kind === 'narrate') return engine.narrate(state.events, [...state.decisions.values()], state.keys.openrouter, {signal:controller.signal});
+    if (kind === 'narrate') return engine.narrate(state.events, [...state.decisions.values()], state.keys.openrouter, {signal:controller.signal, model:narrativeModel()});
     if (kind === 'analyze') state.resumeCache = new Map();
     const key = state.jevMode === 'own' ? state.keys.jev : null;  // No key: the relay uses the site's demo key.
     return engine.analyze(state.events, seedId, description, key, {cache:state.resumeCache, resume:kind === 'resume', signal:controller.signal,
@@ -585,8 +799,14 @@
     try { load(JSON.parse(await file.text()), file.name); }
     catch (error) { setStatus(`Import failed: ${error.message}`, true); }
   }
-  for (const id of ['setup', 'events', 'table']) $(`nav-${id}`).addEventListener('click', () => page(id));
-  page(['setup','events','table'].includes(location.hash.slice(1)) ? location.hash.slice(1) : 'setup');
+  for (const id of PAGES) $(`nav-${id}`).addEventListener('click', () => page(id));
+  page(PAGES.includes(location.hash.slice(1)) ? location.hash.slice(1) : 'setup');
+  setupModel();
+  $('chain-toggle').addEventListener('click', () => { state.chainJevView = !state.chainJevView; renderChain(); });
+  $('copy-chain').addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText(state.chainMarkdown); setStatus('Execution chain copied as Markdown.'); }
+    catch { setStatus('Copy failed; select the text to copy it manually.', true); }
+  });
   if (BROWSER) {
     setupKeys();
     setupPrivacyNote();

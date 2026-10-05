@@ -79,18 +79,27 @@ The server reads the keys on every request, so after you edit `.env`, click **Re
 | Tab | What it does |
 |---|---|
 | **Source & analysis** | Import a JSON export, choose the confirmed starting execution (the *seed*), add context, and run **Analyze with Jev**. Importing never leaves your browser. |
-| **Event timeline** | The seed, every execution Jev linked to it, and other activity from those same processes, in time order. |
-| **Evidence table** | The same incident rows in an 11-column table: Timestamp, Host, Phase, Title, Description, Tools, TTPs, Command Line, Indicator, Type, Pyramid. |
+| **Event timeline** | One compact row per linked event in time order, with a count such as "21 linked of 100 source events". |
+| **Execution chain** | The process-to-process flow and what each process did, as Markdown you can copy. It's built from Jev's results alone until you request a narrative, then the AI-drafted version (with an ATT&CK summary) replaces it; one click switches back. |
+| **Evidence table** | The incident rows in an 11-column, colour-coded table: Timestamp, Host, Phase, Title, Description, Tools, TTPs, Command Line, Indicator, Type, Pyramid. |
 
-How to read the scores:
+Every results tab says which kind of results it shows. **Jev results only, no AI enrichment** means every row, score and link comes straight from Jev and exact process matches. After a narrative it reads **AI-enriched draft** and names the model.
+
+How to read the labels:
 
 | Label | Meaning |
 |---|---|
-| `100% · analyst confirmed` | The seed. This is your confirmation, not a Jev prediction. |
-| `94% · Jev relatedness` | Jev's probability that this execution belongs to the same incident. Linked at 0.8 or above. |
-| `100% · entity match` | A file, network or registry event from the same host and process as a linked execution. This is an exact identity match, not a Jev score. |
+| `Seed · 100%` (amber) | The seed. This is your confirmation, not a Jev prediction. |
+| `Jev 94%` (blue) | Jev's probability that this execution belongs to the same incident. Linked at 0.8 or above. Relatedness, not a malware verdict. |
+| `Same process` (teal) | A file, network or registry event from the same host and process as a linked execution. An exact identity match, not a Jev score. |
 
-**Request narrative** is an optional second step. It sends the linked events (50 at most) to OpenRouter's `deepseek/deepseek-v4.1-flash`, which drafts a title and summary for each row. The server rejects drafts that cite unknown event IDs. The narrative is a draft for you to verify, never a verdict.
+**Request narrative** is an optional second step. It sends the linked events (50 at most), each marked with how it's linked, to OpenRouter. The model defaults to `deepseek/deepseek-v4.1-flash`, and you can enter any OpenRouter model ID in **Narrative model**. The draft adds:
+
+- **Titles and summaries** for each row.
+- **ATT&CK mapping:** a MITRE ATT&CK tactic (shown in Phase) and up to three technique IDs (shown in TTPs, linked to attack.mitre.org). Only the 14 Enterprise tactics and `T1234` / `T1234.001`-style IDs are accepted; anything else is dropped rather than guessed. Without a narrative, Phase shows the observed event type and TTPs stay empty, because Jev doesn't map techniques.
+- **An execution chain** in Markdown with an ATT&CK summary table. Citations of unknown event IDs are replaced with `[unknown event]`.
+
+The narrative is a draft for you to verify, never a verdict.
 
 If an analysis fails partway (for example, during a provider outage), a **Resume** button reuses every Jev answer you already paid for and asks only the remaining questions. Resume points are saved on disk, so they survive a restart.
 

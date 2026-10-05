@@ -20,7 +20,7 @@ class Node {
   fire(name, data = {}) { return this.listeners[name](data); }
   click() { return this.fire('click'); }
 }
-const ids = ['drop','file','choose','preview','source','seed','description','backend','analyze','resume','narrate','status','count','timeline','findings','narrative','nav-setup','nav-events','nav-table','page-setup','page-events','page-table','table-body','table-count','table-summary','table-guidance','provider-status','provider-help','model-name','refresh-provider','access-box','access-code','access-state','unlock'];
+const ids = ['drop','file','choose','preview','source','seed','description','backend','analyze','resume','narrate','status','count','timeline','findings','narrative','nav-setup','nav-events','nav-chain','nav-table','page-setup','page-events','page-chain','page-table','chain','chain-banner','timeline-banner','table-banner','chain-source','chain-toggle','copy-chain','narrative-model','table-body','table-count','table-summary','table-guidance','provider-status','provider-help','model-name','refresh-provider','access-box','access-code','access-state','unlock'];
 const nodes = Object.fromEntries(ids.map(id => [id, new Node(id === 'seed' ? 'select' : 'div')]));
 const origin = 'https://example.replit.dev';
 const requests = [];

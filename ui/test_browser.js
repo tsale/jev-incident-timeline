@@ -140,7 +140,11 @@ const type = (id, value) => { nodes[id].value = value; nodes[id].fire('input'); 
   assert.ok(requests.every(r => r.url === 'api/jev'));
   assert.ok(requests.every(r => r.init.headers.Authorization === 'Bearer ts-key' && !r.init.body.includes('ts-key')));
   assert.equal(nodes['page-events'].hidden, false, 'results open the timeline');
-  assert.match(nodes.timeline.textContent, /Jev-linked incident execution · 94%/);
+  assert.match(nodes.timeline.textContent, /Jev 94%/);
+  assert.match(nodes.count.textContent, /^4 linked of 5 source events$/);
+  assert.match(nodes['timeline-banner'].textContent, /Jev results only · no AI enrichment/);
+  assert.match(nodes.chain.textContent, /Process chain from Jev results/);
+  assert.equal(nodes['narrative-model'].value, 'deepseek/deepseek-v4.1-flash', 'the narrative model is shown before a draft is requested');
   assert.match(nodes.findings.textContent, /Jev decision\(s\) matched/);
   assert.equal(nodes.download.hidden, false, 'run can be downloaded');
   assert.equal(nodes.narrate.disabled, true, 'narrative needs an OpenRouter key');
@@ -149,12 +153,26 @@ const type = (id, value) => { nodes[id].value = value; nodes[id].fire('input'); 
   type('openrouter-key', 'or-key');
   assert.equal(nodes.narrate.disabled, false);
   requests.length = 0;
-  respond = () => reply(200, {model: 'deepseek/deepseek-v4.1-flash', choices: [{finish_reason: 'stop', message: {content: JSON.stringify({timeline: [
-    {event_id: 'child', title: 'Stage execution', summary: 'stage.exe started from the seed', evidence_ids: ['seed', 'child']}]})}}]});
+  type('narrative-model', 'anthropic/claude-sonnet-5.5');
+  assert.equal(storage.get('casebench.model'), 'anthropic/claude-sonnet-5.5', 'a chosen model is remembered');
+  respond = () => reply(200, {model: 'anthropic/claude-sonnet-5.5', choices: [{finish_reason: 'stop', message: {content: JSON.stringify({timeline: [
+    {event_id: 'child', title: 'Stage execution', summary: 'stage.exe started from the seed', evidence_ids: ['seed', 'child'], tactic: 'Execution', techniques: ['T1059.001']}],
+    execution_chain: '- **powershell.exe** [evt:seed]\n  - **stage.exe** [evt:child]'})}}]});
   await nodes.narrate.click(); await settle();
   assert.equal(requests.length, 1);
   assert.equal(requests[0].url, 'https://openrouter.ai/api/v1/chat/completions');
   assert.equal(requests[0].init.headers.Authorization, 'Bearer or-key');
+  assert.equal(JSON.parse(requests[0].init.body).model, 'anthropic/claude-sonnet-5.5', 'the chosen model is used');
+  assert.match(nodes['table-banner'].textContent, /AI-enriched draft.*anthropic\/claude-sonnet-5.5/);
+  assert.equal(nodes['page-chain'].hidden, false, 'the drafted chain opens in its own tab');
+  assert.match(nodes['table-body'].textContent, /Execution · TA0002/);
+  assert.match(nodes['table-body'].textContent, /T1059.001/);
+  type('narrative-model', 'not a model');
+  await nodes.narrate.click(); await settle();
+  assert.match(nodes.status.textContent, /must be an OpenRouter model ID/);
+  assert.equal(requests.length, 1, 'an invalid model is refused before sending');
+  type('narrative-model', 'deepseek/deepseek-v4.1-flash');
+  assert.equal(storage.has('casebench.model'), false, 'the default model is not stored');
   assert.match(nodes['table-body'].textContent, /Stage execution/);
 
   // An outage after one answer offers Resume, which asks Jev only for the remaining candidates.

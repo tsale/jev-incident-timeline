@@ -107,14 +107,36 @@ const jevAnswer = (noul, choice = 'lineage') => response(200, {model: 'jev-1.13.
     assert.equal(sent.length, 2, 'one retry with a larger budget');
     assert.equal(sent[0].url, 'https://openrouter.ai/api/v1/chat/completions');
     assert.equal(sent[0].init.headers.Authorization, 'Bearer or-key');
-    assert.deepEqual(JSON.parse(sent[1].init.body).max_tokens, 8192);
+    assert.deepEqual(JSON.parse(sent[1].init.body).max_tokens, 16384);
+    assert.equal(JSON.parse(sent[0].init.body).model, 'deepseek/deepseek-v4.1-flash');
     assert.deepEqual(JSON.parse(JSON.parse(sent[0].init.body).messages[1].content).linked_events.map(e => e.id), ['seed', 'file-1', 'child']);
     assert.equal(result.timeline[0].event_id, 'child');
     const invented = draft([{event_id: 'made-up', title: 'x', summary: 'x', evidence_ids: ['seed']}]);
     await assert.rejects(engine.narrate(events, decisions, 'k', {fetchImpl: async () => invented}),
-      {message: 'OpenRouter (DeepSeek) returned invalid or truncated JSON after retry'});
+      {message: 'OpenRouter returned invalid or truncated JSON after retry'});
     await assert.rejects(engine.narrate(events, decisions, 'k', {fetchImpl: async () => response(401, 'no')}),
       {message: 'OpenRouter rejected the API key (HTTP 401); check your OpenRouter key.'});
+    // Chosen model, ATT&CK mapping and the Markdown execution chain (same rules as web_app.py).
+    const chosen = [];
+    const drafted = await engine.narrate(events, decisions, 'k', {model: 'anthropic/claude-sonnet-5.5', fetchImpl: async (url, init) => { chosen.push(JSON.parse(init.body)); return response(200, {
+      model: 'anthropic/claude-sonnet-5.5', choices: [{finish_reason: 'stop', message: {content: JSON.stringify({timeline: [
+        {event_id: 'child', title: 'Child', summary: 'Started', evidence_ids: ['child'], tactic: 'execution', techniques: ['t1059.003', 'bogus']}],
+        execution_chain: '- **stage.exe** [evt:child] then [evt:invented]'})}}]}); }});
+    assert.equal(chosen[0].model, 'anthropic/claude-sonnet-5.5');
+    assert.deepEqual([drafted.timeline[0].tactic, drafted.timeline[0].tactic_id, drafted.timeline[0].techniques], ['Execution', 'TA0002', ['T1059.003']]);
+    assert.equal(drafted.execution_chain, '- **stage.exe** [evt:child] then [unknown event]');
+    await assert.rejects(engine.narrate(events, decisions, 'k', {model: 'https://evil/x', fetchImpl: async () => { throw new Error('sent'); }}), /OpenRouter model ID/);
+    // Each event tells the model how it is linked.
+    const links = Object.fromEntries(engine.timelineInput(events, [{id: 'seed', related: true, probability: 1, reason: 'Confirmed starting execution (user-provided)'},
+      {id: 'child', related: true, probability: 0.94, reason: 'lineage (Jev-selected category; not generated prose)'}]).map(e => [e.id, e.link]));
+    assert.deepEqual(links, {seed: {type: 'confirmed_seed'}, 'file-1': {type: 'same_process_as', event_id: 'seed'}, child: {type: 'jev_linked', probability: 0.94, basis: 'lineage'}});
+    // The narrative prompt and tactic list are the same as the local portal's (web_app.py).
+    const python = fs.readFileSync(path.join(root, 'web_app.py'), 'utf8');
+    const literals = block => [...block.matchAll(/'((?:[^'\\\n]|\\.)*)'/g)].map(m => m[1]).join('');
+    const between = (textBlock, open, close) => { const start = textBlock.indexOf(open); return textBlock.slice(start, textBlock.indexOf(close, start)); };
+    assert.equal(literals(between(python, '# <narrative-prompt>', '# </narrative-prompt>')), engine.SYSTEM_PROMPT);
+    const pyTactics = Object.fromEntries([...between(python, 'TACTICS = {', '}').matchAll(/'(TA\d{4})': '([^']+)'/g)].map(m => [m[1], m[2]]));
+    assert.deepEqual(pyTactics, engine.TACTICS);
   }
   console.log('Engine passed: byte-identical Jev requests to jev_incident.py on 3 fixtures, retries, resume, narrative validation.');
 })().catch(error => { console.error(error); process.exit(1); });

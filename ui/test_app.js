@@ -23,7 +23,7 @@ class Node {
   fire(name, data = {}) { return this.listeners[name](data); }
   click() { return this.fire('click'); }
 }
-const ids = ['drop','file','choose','preview','source','seed','description','backend','analyze','resume','narrate','status','count','timeline','findings','narrative','nav-setup','nav-events','nav-table','page-setup','page-events','page-table','table-body','table-count','table-summary','table-guidance','provider-status','provider-help','model-name','refresh-provider','access-box','access-code','access-state','unlock'];
+const ids = ['drop','file','choose','preview','source','seed','description','backend','analyze','resume','narrate','status','count','timeline','findings','narrative','nav-setup','nav-events','nav-chain','nav-table','page-setup','page-events','page-chain','page-table','chain','chain-banner','timeline-banner','table-banner','chain-source','chain-toggle','copy-chain','narrative-model','table-body','table-count','table-summary','table-guidance','provider-status','provider-help','model-name','refresh-provider','access-box','access-code','access-state','unlock'];
 const nodes = Object.fromEntries(ids.map(id => [id, new Node(id === 'seed' ? 'select' : 'div')]));
 const requests = [];
 let answers = [];
@@ -58,7 +58,7 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
   assert.equal(nodes['page-events'].hidden, false);
   assert.match(nodes.source.textContent, /Bundled malicious-events example · 100 events/);
   assert.equal(nodes.seed.value, 'VvT8xKABOYkemEz9sgQR');
-  assert.equal(nodes.count.textContent, '0 linked events');
+  assert.match(nodes.count.textContent, /^0 linked of 100 source events$/);
   assert.equal(nodes.narrate.disabled, true);
   assert.equal(nodes.timeline.children.length, 1, 'event timeline does not show unassessed events');
   assert.equal(nodes.timeline.children[0].className, 'empty', 'empty timeline explains the next step');
@@ -75,7 +75,9 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
       reused_answers:0, retried_requests:0, elapsed_seconds:1.5, api_elapsed_seconds:1.2,
       input_tokens:300, output_tokens:40, resumed:false, evidence_dir:'/srv/.local-runs/private/evidence',
       telemetry_file:'/srv/private-input.json', resumed_from:'/srv/.local-runs/previous'}},
-    {timeline:[{event_id:'child', title:'Child execution', summary:'Observed process start', evidence_ids:['seed','child']}], model:'local-model', usage:{}}];
+    {timeline:[{event_id:'child', title:'Child execution', summary:'Observed process start', evidence_ids:['seed','child'], tactic:'Execution', tactic_id:'TA0002', techniques:['T1059']}],
+      execution_chain:'## Chain\n- **powershell.exe** [evt:seed]\n  - **stage.exe** [evt:child]\n\n### ATT&CK summary\n| Tactic | Technique | Evidence |\n|---|---|---|\n| Execution | T1059 | [evt:child] |',
+      model:'local-model', usage:{}}];
   nodes.analyze.click(); await flush();
   assert.equal(requests[0].url, 'http://127.0.0.1:8765/api/analyze');
   assert.equal(requests[0].body.seed_id, 'seed');
@@ -84,10 +86,20 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
   assert.equal(requests[0].options.credentials, 'omit');
   assert.equal(nodes['page-events'].hidden, false, 'a completed analysis opens the event timeline');
   assert.equal(nodes['provider-help'].textContent, '', 'no key hint once Jev is configured');
-  assert.match(nodes.timeline.textContent, /Jev-linked incident execution · 88%/);
-  assert.match(nodes.timeline.textContent, /Analyst-confirmed malicious seed · 100%/);
-  assert.match(nodes.timeline.textContent, /Incident process activity · exact entity match/);
-  assert.match(nodes.timeline.textContent, /Not a maliciousness verdict/);
+  assert.match(nodes.timeline.textContent, /Jev 88%/);
+  assert.match(nodes.timeline.textContent, /Seed · 100%/);
+  assert.match(nodes.timeline.textContent, /Same process/);
+  assert.match(nodes.count.textContent, /^3 linked of 5 source events$/);
+  // Without a narrative every results tab says plainly that it shows Jev results only.
+  for (const id of ['timeline-banner', 'chain-banner', 'table-banner']) {
+    assert.equal(nodes[id].hidden, false);
+    assert.match(nodes[id].textContent, /Jev results only · no AI enrichment/);
+  }
+  // The execution chain is built from Jev results alone until a narrative is drafted.
+  assert.match(nodes.chain.textContent, /Process chain from Jev results/);
+  assert.match(nodes.chain.textContent, /stage.exe/);
+  assert.match(nodes['chain-source'].textContent, /no AI/);
+  assert.equal(nodes['chain-toggle'].hidden, true);
   assert.match(nodes.findings.textContent, /Model jev-1.13.0/);
   assert.match(nodes.findings.textContent, /4 candidates evaluated/);
   assert.match(nodes.findings.textContent, /300 input \/ 40 output tokens/);
@@ -96,37 +108,52 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
   assert.equal(nodes['table-body'].children.length, 3, 'seed, related candidate and same-entity file evidence only');
   assert.doesNotMatch(nodes['table-body'].textContent, /unrelated|notepad.exe|rundll32.exe/);
   assert.match(nodes['table-body'].textContent, /88%/);
-  assert.match(nodes['table-body'].textContent, /100% · analyst confirmed/);
-  assert.match(nodes['table-body'].textContent, /100% · entity match/);
+  assert.match(nodes['table-body'].textContent, /Seed · 100%/);
+  assert.match(nodes['table-body'].textContent, /Same process/);
   assert.match(nodes['table-summary'].textContent, /1 related/);
   assert.doesNotMatch(nodes['table-body'].textContent, /Unassessed/);
-  assert.match(nodes['table-body'].textContent, /Context · confirmed seed/);
-  assert.match(nodes['table-guidance'].textContent, /Jev assessment complete/);
+  assert.match(nodes['table-body'].textContent, /Same process as seed/);
+  assert.match(nodes['table-guidance'].textContent, /Jev assessed/);
   assert.doesNotMatch(nodes.timeline.textContent + nodes['table-body'].textContent, /Reused from earlier run/, 'new answers carry no reuse marker');
   if (process.env.POC_NO_OPENROUTER) {
     assert.equal(nodes.narrate.disabled, true);
     assert.match(nodes['provider-status'].textContent, /OpenRouter key missing/);
-    assert.match(nodes['table-body'].textContent, /Related · review/);
+    assert.match(nodes['table-body'].textContent, /Jev basis: lineage/);
     console.log('Missing-key gate passed: Jev assessments visible, DeepSeek draft unavailable.');
     return;
   }
   assert.equal(nodes.narrate.disabled, false);
-  assert.match(nodes['table-body'].textContent, /Related · review/);
+  assert.match(nodes['table-body'].textContent, /Jev basis: lineage/);
   assert.match(nodes['model-name'].textContent, /deepseek\/deepseek-v4.1-flash/);
   assert.match(nodes['provider-status'].textContent, /OpenRouter ready/);
   nodes.narrate.click(); await flush();
   assert.equal(requests[1].url, 'http://127.0.0.1:8765/api/narrate');
-  assert.deepEqual(Object.keys(requests[1].body), ['analysis_id']);
+  assert.deepEqual(Object.keys(requests[1].body), ['analysis_id', 'model']);
+  assert.equal(requests[1].body.model, 'deepseek/deepseek-v4.1-flash', 'the default narrative model is shown and sent');
   assert.equal(requests[1].body.analysis_id, 'analysis-1');
   assert.match(nodes.narrative.textContent, /Evidence IDs: seed, child/);
   assert.match(nodes['table-body'].textContent, /Child execution/);
   assert.match(nodes['table-body'].textContent, /Observed process start/);
   assert.match(nodes['table-body'].textContent, /88%/, 'OpenRouter draft does not replace Jev probability');
+  assert.match(nodes['table-body'].textContent, /Execution · TA0002/);
+  assert.match(nodes['table-body'].textContent, /T1059/);
+  for (const id of ['timeline-banner', 'chain-banner', 'table-banner']) assert.match(nodes[id].textContent, /AI-enriched draft.*local-model/);
+  assert.match(nodes.timeline.textContent, /AIChild execution: Observed process start/);
+  // The drafted Markdown chain opens in its own tab, rendered (list and table), with the Jev-only version one click away.
+  assert.equal(nodes['page-chain'].hidden, false);
+  assert.match(nodes['chain-source'].textContent, /AI draft · local-model/);
+  assert.match(nodes.chain.textContent, /ATT&CK summary/);
+  assert.ok(nodes.chain.children.some(child => child.className === 'md-table'));
+  assert.ok(nodes.chain.children.some(child => child.tagName === 'ul'));
+  nodes['chain-toggle'].click();
+  assert.match(nodes.chain.textContent, /Process chain from Jev results/);
+  nodes['chain-toggle'].click();
+  assert.match(nodes.chain.textContent, /ATT&CK summary/);
   assert.equal(nodes.narrative.children[1].children[3].children[1].href, '#event-2');
   assert.equal(nodes.narrative.children[1].children[3].children[3].href, '#event-0');
-  answers = [{httpStatus:502, error:'OpenRouter (DeepSeek) returned invalid or truncated JSON after retry'}];
+  answers = [{httpStatus:502, error:'OpenRouter returned invalid or truncated JSON after retry'}];
   nodes.narrate.click(); await flush();
-  assert.match(nodes.status.textContent, /OpenRouter \(DeepSeek\) returned invalid or truncated JSON after retry/);
+  assert.match(nodes.status.textContent, /OpenRouter returned invalid or truncated JSON after retry/);
   nodes.description.value = 'Changed context'; nodes.description.fire('input');
   assert.equal(nodes.narrate.disabled, true);
   assert.equal(nodes.timeline.children.filter(child => child.className === 'event').length, 0, 'changing analyst context clears linked timeline');
@@ -165,11 +192,11 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
   assert.equal(nodes.resume.hidden, true);
   assert.match(nodes.status.textContent, /after resume \(2 answers reused\)/);
   assert.match(nodes.findings.textContent, /2 answers reused · Resumed run/);
-  assert.match(nodes.timeline.textContent, /Jev-linked incident execution · 88%/);
+  assert.match(nodes.timeline.textContent, /Jev 88%/);
   // Decisions whose Jev answer came from the earlier run carry a quiet marker with the original answer time.
   const eventFor = anchor => nodes.timeline.children.find(article => article.id === anchor);
   const childEvent = eventFor('event-2');
-  assert.ok(childEvent.children[1].children[0].children.some(tag => tag.className === 'tag reused' && tag.textContent === 'Reused from earlier run · answered 2026-09-25T10:15:00Z'));
+  assert.ok(childEvent.children[1].children[0].children.some(tag => tag.className === 'pill reused' && tag.textContent === 'Reused from earlier run · answered 2026-09-25T10:15:00Z'));
   assert.doesNotMatch(eventFor('event-0').textContent, /Reused from earlier run/, 'the analyst-confirmed seed is never marked reused');
   const tableRow = id => nodes['table-body'].children.find(tr => tr.sourceEventId === id);
   assert.ok(tableRow('child').children[3].children.some(span => span.className === 'row-origin reused' && span.textContent === 'Reused from earlier run · answered 2026-09-25T10:15:00Z'));
@@ -228,7 +255,7 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
     await flush();
     const count = JSON.parse(data).length;
     assert.equal(nodes.source.textContent.includes(`${count} events`), true);
-    assert.equal(nodes.count.textContent, '0 linked events');
+    assert.match(nodes.count.textContent, /^0 linked of \d+ source events$/);
     assert.equal(nodes.seed.disabled, false, 'fields-only export contains process starts');
     if (process.env.POC_RUN_DIR) assert.equal(nodes.seed.value, 'VvT8xKABOYkemEz9sgQR', 'prefer entity-identified duplicate 2.8.exe start over same-time record without entity ID');
     assert.doesNotMatch(nodes.source.textContent, /Time unavailable/);
@@ -255,7 +282,7 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
           assert.match(shown.textContent, new RegExp(`${(decision.probability * 100).toFixed(0)}%`));
         } else assert.equal(shown, undefined, `below-threshold candidate ${decision.id} must not appear`);
       }
-      const contextRows = nodes['table-body'].children.filter(tr => tr.textContent.includes('100% · entity match'));
+      const contextRows = nodes['table-body'].children.filter(tr => tr.textContent.includes('Same process'));
       assert.equal(contextRows.length, 19, 'same-host, same-entity non-execution evidence must be linked as context');
       assert.equal(nodes['table-body'].children.length, 21, 'only 2 process starts and 19 linked context events in incident timeline');
       assert.match(nodes['table-body'].textContent, /UserInitMprLogonScript/, 'registry evidence survives Elasticsearch fields projection');
