@@ -20,6 +20,8 @@
   const DEFAULT_MODEL = 'deepseek/deepseek-v4.1-flash';
   const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._:-]*$/;
   const PAGES = ['setup', 'events', 'chain', 'table'];
+  // Analyst context for the bundled lab example (its confirmed seed is 2.8.exe on CLA-WS-214).
+  const EXAMPLE_CONTEXT = 'Analyst-confirmed 2.8.exe execution on CLA-WS-214.';
   const NO_DECISIONS = `No ${BROWSER ? 'Jev' : 'server-issued'} decisions. Local preview does not assign relatedness.`;
   const own = (obj, key) => Object.prototype.hasOwnProperty.call(obj, key);
   const object = x => x !== null && typeof x === 'object' && !Array.isArray(x);
@@ -545,6 +547,9 @@
     resetAnalysis();
     state.exampleLoaded = example;
     state.resumeCache = new Map();
+    // The example fills in its analyst context, without overwriting anything the analyst typed.
+    const context = $('description').value.trim();
+    if (example && (!context || context === EXAMPLE_CONTEXT)) $('description').value = EXAMPLE_CONTEXT;
     state.events = Array.isArray(input) ? input : input.events;
     state.rows = rows;
     const seed = $('seed');
@@ -827,7 +832,7 @@
       if (!response.ok) throw Error('Bundled example unavailable on this local server.');
       const body = await response.text();
       if (body.length > MAX_BYTES) throw Error('Bundled example exceeds the 2 MiB limit.');
-      load(JSON.parse(body), 'Bundled malicious-events example');
+      load(JSON.parse(body), 'Bundled malicious-events example', true);
     } catch (error) { setStatus(`Example load failed: ${error.message}`, true); }
   });
   for (const id of BROWSER ? ['seed', 'description'] : ['seed', 'description', 'backend']) $(id).addEventListener(id === 'description' || id === 'backend' ? 'input' : 'change', () => {

@@ -87,6 +87,7 @@ const type = (id, value) => { nodes[id].value = value; nodes[id].fire('input'); 
   // Bundled example loads from the site's own static files; nothing is sent.
   await nodes.preview.click(); await settle();
   assert.match(nodes.source.textContent, /Bundled malicious-events example · 100 events/);
+  assert.equal(nodes.description.value, 'Analyst-confirmed 2.8.exe execution on CLA-WS-214.', 'the example fills in its analyst context');
   assert.equal(nodes.seed.value, 'VvT8xKABOYkemEz9sgQR');
   assert.equal(requests.length, 0);
 

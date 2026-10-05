@@ -57,6 +57,7 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
   nodes['nav-events'].click();
   assert.equal(nodes['page-events'].hidden, false);
   assert.match(nodes.source.textContent, /Bundled malicious-events example · 100 events/);
+  assert.equal(nodes.description.value, 'Analyst-confirmed 2.8.exe execution on CLA-WS-214.', 'the example fills in its analyst context');
   assert.equal(nodes.seed.value, 'VvT8xKABOYkemEz9sgQR');
   assert.match(nodes.count.textContent, /^0 linked of 100 source events$/);
   assert.equal(nodes.narrate.disabled, true);
