@@ -12,6 +12,8 @@
   // Temporary TypeSafe failures (5xx, timeouts) get at most this many extra tries.
   const RETRY_BACKOFF_MS = [1000, 2000];
   const REQUEST_TIMEOUT_MS = 30000;
+  // Narrative drafts reason before answering and can take minutes (web_app.py allows the same).
+  const NARRATIVE_TIMEOUT_MS = 180000;
   const FIELDS = ['name', 'executable', 'command_line', 'pid', 'entity_id', 'parent', 'ancestry'];
   const QUESTIONS = {
     related: {type: 'noul', instructions: QUESTION,
@@ -209,10 +211,10 @@
   }
 
   // One provider request with a timeout. Network failures and CORS refusals both surface as TypeError.
-  async function send(url, init, fetchImpl, signal) {
+  async function send(url, init, fetchImpl, signal, timeoutMs = REQUEST_TIMEOUT_MS) {
     const controller = new AbortController();
     let timedOut = false;
-    const timer = setTimeout(() => { timedOut = true; controller.abort(); }, REQUEST_TIMEOUT_MS);
+    const timer = setTimeout(() => { timedOut = true; controller.abort(); }, timeoutMs);
     const cancel = () => controller.abort();
     signal?.addEventListener('abort', cancel);
     try {
@@ -454,7 +456,7 @@
     for (const maxTokens of [8192, 16384]) {
       const body = JSON.stringify({model, temperature: 0, max_tokens: maxTokens, messages});
       const reply = await send(OPENROUTER, {method: 'POST', headers: {'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json',
-        'X-Title': 'Jevline'}, body}, fetchImpl, signal);
+        'X-Title': 'Jevline'}, body}, fetchImpl, signal, NARRATIVE_TIMEOUT_MS);
       if (reply.networkError) throw unreachable('OpenRouter', false);
       if (reply.timedOut) throw new ProviderError('OpenRouter could not be reached or timed out; retry later.');
       const status = reply.response.status;

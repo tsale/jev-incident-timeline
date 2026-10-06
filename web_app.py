@@ -488,7 +488,7 @@ def narrate(events, key, model=MODEL):
     for max_tokens in (8192, 16384):
         body = json.dumps({'model': model, 'temperature': 0, 'max_tokens': max_tokens, 'messages': messages}).encode()
         request = Request(OPENROUTER, data=body, headers={'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json'})
-        with urlopen(request, timeout=90) as response:
+        with urlopen(request, timeout=180) as response:  # Drafts reason before answering; allow minutes.
             result = json.load(response)
         try:
             choice = result['choices'][0]
