@@ -263,7 +263,9 @@
     return typeof when === 'string' && when ? `Reused from earlier run · answered ${when}` : 'Reused from earlier run';
   }
   const pct = p => `${(p * 100).toFixed(0)}%`;
-  const hostOf = row => field(row.src.host, 'name') || row.src.host;
+  // Host and user may be strings or {name} objects (with or without a name); only text is shown.
+  const nameOf = value => typeof value === 'string' ? value : typeof field(value, 'name') === 'string' ? field(value, 'name') : '';
+  const hostOf = row => nameOf(row.src.host);
   const actionOf = row => field(field(row.src, 'event'), 'action') || row.src.action || row.kind;
   const labelOf = row => row.process.name || field(row.src, 'name') || field(row.src, 'file')?.path || text(row.kind);
   const basisOf = decision => typeof decision?.reason === 'string' ? decision.reason.split(' (')[0] : '';
@@ -383,7 +385,7 @@
       const [indicator] = indicatorFor(row);
       const detail = row.process.command_line || (!row.execution ? indicator : '');
       if (detail) body.append(element('code', 'event-detail', detail));
-      const meta = [hostOf(row), field(row.src.user, 'name') || row.src.user, row.process.pid !== undefined ? `PID ${row.process.pid}` : '',
+      const meta = [hostOf(row), nameOf(row.src.user), row.process.pid !== undefined ? `PID ${row.process.pid}` : '',
         origin.context ? `same process as ${origin.context.id}` : '', `event ${row.id}`].filter(x => typeof x === 'string' ? x : x !== undefined && x !== null);
       body.append(element('p', 'event-meta', meta.join(' · ')));
       article.append(element('time', 'event-time', row.time || 'Time unavailable'), body);

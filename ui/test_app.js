@@ -288,6 +288,7 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
       assert.equal(nodes['table-body'].children.length, 21, 'only 2 process starts and 19 linked context events in incident timeline');
       assert.match(nodes['table-body'].textContent, /UserInitMprLogonScript/, 'registry evidence survives Elasticsearch fields projection');
       assert.match(nodes['table-body'].textContent, /sihost.exe/, 'remote-thread target survives Elasticsearch fields projection');
+      assert.doesNotMatch(nodes.timeline.textContent, /\[object Object\]/, 'events whose user has no name show no placeholder');
       assert.ok(nodes['table-body'].children.every(tr => tr.children.length === 11));
       assert.match(nodes['table-summary'].textContent, /19 entity-linked context/);
       console.log('CLI replay comparison passed: all candidate probabilities and 19 same-entity context events mapped without invented scores.');
